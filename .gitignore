@@ -1,0 +1,13 @@
+__pycache__/
+*.egg-info/
+*.log
+test_mcp_result.json
+
+# 本机的 AnythingLLM API key，不提交
+config.js
+
+# Go 构建产物（源码在 backend/，用 go build 自行编译）
+*.exe
+
+# 下载的发行包，非本项目源码
+PetHospitalMCP/release-windows/
