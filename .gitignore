@@ -15,4 +15,5 @@ PetHospitalMCP/release-windows/
 # 本机的模型地址和密钥，仓库里只给 config.example.ini 模板
 config.ini
 Agent/启动本地模型.bat
+Agent/*/启动本地模型.bat
 .idea/
