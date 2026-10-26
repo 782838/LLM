@@ -15,8 +15,9 @@ class Config:
     def __init__(self, base_url, model, api_key="", timeout=DEFAULT_TIMEOUT):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.api_key = api_key.strip()
+        self.api_key = _clean_key(api_key)
         self.timeout = timeout
+        self.sections = {}  # load() 会把解析好的小节塞进来
 
     @property
     def endpoint(self):
@@ -33,6 +34,53 @@ class Config:
 
     def __repr__(self):
         return "Config(model=%r, base_url=%r)" % (self.model, self.base_url)
+
+
+def _clean_key(api_key):
+    """清洗 api_key。
+
+    HTTP 头只能装 latin-1 字符，模板里的中文占位符（比如「你的密钥」）
+    如果原样塞进 Authorization 会在发请求时抛 UnicodeEncodeError。
+    这里把不是 ASCII 的密钥一律当作没填。
+    """
+    key = (api_key or "").strip().strip('"').strip("'")
+    if not key:
+        return ""
+    try:
+        key.encode("ascii")
+    except UnicodeEncodeError:
+        return ""
+    # 模板占位符也当没填
+    if key.lower() in ("your-key", "your_key", "placeholder", "xxx", "none", "null"):
+        return ""
+    return key
+
+
+def parse_ini(path):
+    """解析 ini，返回 {小节名: {键: 值}}。
+
+    顶层键（不在任何 [小节] 里的）归到空字符串这个名字下。
+    键名统一小写，值保持原样（只去首尾空白）。
+
+    [search] 这种小节必须保留层次：如果平铺成一个字典，
+    baidu_qianfan_api_key 就会和 base_url 混在一起，读不出它属于哪个小节。
+    """
+    sections = {"": {}}
+    current = ""
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#") or line.startswith(";"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                current = line[1:-1].strip().lower()
+                sections.setdefault(current, {})
+                continue
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            sections.setdefault(current, {})[k.strip().lower()] = v.strip()
+    return sections
 
 
 def _candidate_paths(filename):
@@ -64,14 +112,8 @@ def load(filename="config.ini"):
             "找不到 %s。请把它放在当前目录或程序目录下，格式见 config.example.ini。" % filename
         )
 
-    raw = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith(";") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            raw[k.strip().lower()] = v.strip()
+    sections = parse_ini(path)
+    raw = sections.get("", {})
 
     if not raw.get("base_url"):
         raise ConfigError("%s 里缺少 base_url。" % path)
@@ -85,12 +127,27 @@ def load(filename="config.ini"):
         except ValueError:
             timeout = DEFAULT_TIMEOUT
 
-    return Config(
+    cfg = Config(
         base_url=raw["base_url"],
         model=raw["model"],
         api_key=raw.get("api_key", ""),
         timeout=timeout,
     )
+    cfg.sections = sections
+    return cfg
+
+
+def read_section(section, key, filename="config.ini"):
+    """从指定小节读一个配置项，读不到返回空串。
+
+    工具的配置（比如 [search] 的 baidu_qianfan_api_key）走这里，
+    不要硬编码在代码里。
+    """
+    path = find_config(filename)
+    if path is None:
+        return ""
+    sections = parse_ini(path)
+    return sections.get(section.lower(), {}).get(key.lower(), "")
 
 
 def load_or_default(filename="config.ini"):

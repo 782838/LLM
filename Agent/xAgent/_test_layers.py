@@ -61,19 +61,22 @@ check("core 不导入任何界面库", not bad, str(bad))
 
 print()
 print("=" * 66)
-print("2. core 只依赖标准库与自身")
+print("2. core 只依赖标准库，外加白名单里的解析库")
 print("=" * 66)
 STD = set(sys.stdlib_module_names)
+# trafilatura 是任务要求用的网页正文提取库，允许出现在 core/tools 里。
+# 它只在 web_tools 内部延迟导入，没装也不影响其他工具。
+ALLOWED_THIRD = {"trafilatura"}
 third = []
 for path in core_files:
     for mod in imports_of(path):
         if mod.startswith("."):
             continue
         top = mod.split(".")[0]
-        if top in STD or top == "core":
+        if top in STD or top == "core" or top in ALLOWED_THIRD:
             continue
         third.append((os.path.relpath(path, ROOT), mod))
-check("core 没有第三方依赖", not third, str(third))
+check("core 第三方依赖仅限白名单", not third, str(third))
 
 print()
 print("=" * 66)
@@ -131,7 +134,7 @@ sys.path.insert(0, ROOT)
 from core.tools import default_registry
 
 reg = default_registry()
-check("12 个工具", len(reg) == 12, str(len(reg)))
+check("14 个工具", len(reg) == 14, str(len(reg)))
 check("getDate 可用", "2026" in (reg.execute("getDate", {})[0] or ""))
 check("isLeapYear 可用", "不是闰年" in (reg.execute("isLeapYear", {"year": 1900})[0] or ""))
 
@@ -148,7 +151,7 @@ from core.agent import Agent
 
 a = Agent()
 check("Agent 可实例化", a is not None)
-check("Agent 有 12 个工具", len(a.tools) == 12)
+check("Agent 有 14 个工具", len(a.tools) == 14)
 check("Agent 历史为空", a.history == [])
 a.history.append({"role": "user", "content": "x"})
 a.reset()
