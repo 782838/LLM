@@ -56,8 +56,7 @@ python main.py --check
 | `F1` | 显示工具清单 |
 | `Ctrl+C` | 退出 |
 
-## 14 个工具
-
+## 15 个工具
 时间与历法：
 
 - `getDate` —— 调本地 `date` 命令取当前日期时间。
@@ -93,7 +92,32 @@ baidu_qianfan_api_key = 你的千帆APIKey
 ```
 
 `fetchWeb` 依赖 `trafilatura`（`pip install trafilatura`）。它是**可选依赖**：
-没装时 `fetchWeb` 会返回明确的安装提示，不影响其余 13 个工具。
+没装时 `fetchWeb` 会返回明确的安装提示，不影响其余 14 个工具。
+## 命令行执行：RunCli
+
+`RunCli` 让 Agent 能调本机任意 CLI 程序。参数分两部分传：
+
+```
+RunCli(command="git", args=["--version"])
+RunCli(command="dir", args=[])
+RunCli(command="python", args=["-c", "print('hi')"])
+```
+
+实现要点：
+
+| 项 | 做法 |
+|---|---|
+| 执行方式 | `subprocess.run([程序名] + 参数列表, shell=False)` |
+| 为什么不用 `shell=True` | 参数里的 `&`、`\|`、`>`、`;` 不会被解释成 shell 语法 |
+| 返回值 | 退出码 + 标准输出 + 标准错误，三段式结构化文本 |
+| 超时 | 默认 30 秒，可用 `timeout` 调大，上限 120 秒 |
+| 输出截断 | stdout / stderr 各 4000 字符，截断时标明原始长度 |
+| 编码 | 依次尝试 UTF-8、GBK、GB18030，都不行就宽松解码 |
+| 程序查找 | 用 `shutil.which()`，找不到时列出常见可用程序帮模型纠正 |
+
+`args` 传字符串时会当成**单个参数**处理，不按空格切分 —— 一旦切分就等于在做命令拼接。
+
+**这个工具不做命令白名单**，按当前用户权限执行，仅用于受控教学环境。
 
 ### 异常处理
 
@@ -136,6 +160,7 @@ python _test_layers.py     # 24 项：分层是否真正解耦
 python _test_agent.py      # 16 项：mock 服务下的完整对话流程
 python _test_tui.py        # 11 项：Textual 无头模式下的界面接线
 python _test_web.py        # 46 项：searchWeb / fetchWeb 的全部异常路径
+python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编码
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

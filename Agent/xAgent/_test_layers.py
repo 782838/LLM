@@ -134,7 +134,7 @@ sys.path.insert(0, ROOT)
 from core.tools import default_registry
 
 reg = default_registry()
-check("14 个工具", len(reg) == 14, str(len(reg)))
+check("15 个工具", len(reg) == 15, str(len(reg)))
 check("getDate 可用", "2026" in (reg.execute("getDate", {})[0] or ""))
 check("isLeapYear 可用", "不是闰年" in (reg.execute("isLeapYear", {"year": 1900})[0] or ""))
 
@@ -151,7 +151,7 @@ from core.agent import Agent
 
 a = Agent()
 check("Agent 可实例化", a is not None)
-check("Agent 有 14 个工具", len(a.tools) == 14)
+check("Agent 有 15 个工具", len(a.tools) == 15)
 check("Agent 历史为空", a.history == [])
 a.history.append({"role": "user", "content": "x"})
 a.reset()
