@@ -1,5 +1,7 @@
 """界面部件。"""
-from .chat_log import ChatLog
+from .conversation import Conversation
+from .message import MessageCard, ToolCard
 from .prompt_input import PromptInput
+from .sidebar import Sidebar
 
-__all__ = ["ChatLog", "PromptInput"]
+__all__ = ["Conversation", "MessageCard", "ToolCard", "PromptInput", "Sidebar"]
