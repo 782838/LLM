@@ -14,6 +14,7 @@
 """
 import json
 
+from . import skills as skill_store
 from .config import Config
 from .llm.client import Client, LLMError, ToolCallBuffer
 from .tools import default_registry
@@ -52,12 +53,30 @@ class ToolCall:
 class Agent:
     """一个有记忆、会用工具的对话代理。"""
 
-    def __init__(self, config=None, registry=None, system_prompt=None):
+    def __init__(self, config=None, registry=None, system_prompt=None,
+                 skills_root=None, auto_load_skills=True):
         self.config = config or Config("http://127.0.0.1:11437/v1", "")
         self.client = Client(self.config)
-        self.tools = registry if registry is not None else default_registry()
         self.history = []
-        self.system_prompt = system_prompt
+
+        # 发现技能。初始化阶段只读 name 和 description，不读正文。
+        self.skills = []
+        self.skill_notes = []
+        if auto_load_skills:
+            self.skills, self.skill_notes = skill_store.discover(skills_root)
+
+        # 技能清单注入 System Prompt
+        self.system_prompt = skill_store.build_system_prompt(
+            self.skills, base_prompt=system_prompt
+        )
+
+        # 工具表要把技能列表闭包进去，loadSkill 才知道有哪些技能
+        self.tools = (
+            registry
+            if registry is not None
+            else default_registry(skills=self.skills, skills_root=skills_root)
+        )
+
 
         # 事件回调，界面层按需挂
         self.on_assistant_start = None
@@ -88,6 +107,10 @@ class Agent:
 
     def tool_names(self):
         return self.tools.names()
+
+    def skill_summary(self):
+        """给界面显示的一句话技能摘要。"""
+        return skill_store.describe(self.skills)
 
     # ---- 主流程 ----
     def ask(self, text):

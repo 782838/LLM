@@ -103,10 +103,16 @@ class XAgentApp(App):
         cfg = agent.config
         model = cfg.model or "（未配置模型）"
         self.query_one("#status", Static).update(
-            "模型 %s   │   %d 个工具   │   %s" % (model, len(agent.tools), where)
+            "模型 %s   │   %d 个工具   │   %s"
+            % (model, len(agent.tools), where)
         )
         log = self.query_one(ChatLog)
         log.write("输入问题后回车发送，Ctrl+J 换行，F1 看工具清单。")
+
+        # 技能加载情况一并提示，方便确认 .agents/skills 有没有被扫到
+        log.write("技能：%s" % agent.skill_summary())
+        for note in agent.skill_notes:
+            log.write("  · %s" % note)
         log.write("")
 
     # ---- 用户输入 ----

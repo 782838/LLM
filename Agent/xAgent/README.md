@@ -56,7 +56,7 @@ python main.py --check
 | `F1` | 显示工具清单 |
 | `Ctrl+C` | 退出 |
 
-## 15 个工具
+## 16 个工具
 时间与历法：
 
 - `getDate` —— 调本地 `date` 命令取当前日期时间。
@@ -134,7 +134,75 @@ RunCli(command="python", args=["-c", "print('hi')"])
 | HTML 解析失败 | 带异常类型和原始信息 |
 | 正文超长 | 截断并标注「已截断」 |
 
-## 设计要点
+## Agent Skills：技能动态加载
+
+按 Agent Skills 规范实现，分三步走：启动时只扫元数据、注入 System Prompt、正文按需加载。
+
+### 目录约定
+
+```
+<项目根>/.agents/skills/<技能名>/SKILL.md
+```
+
+**项目根是程序启动时的用户工作目录**（`os.getcwd()`），不是 python.exe 的安装目录，
+也不是代码存放目录。所以在 `D:\LLM` 下启动，就读 `D:\LLM\.agents\skills\`。
+
+每个技能目录至少包含一个 `SKILL.md`，开头用 YAML Frontmatter 声明 `name` 和 `description`：
+
+```markdown
+---
+name: 撰写通知
+description: 撰写公司内部通知
+---
+
+正文规则……
+```
+
+两个字段都必需，缺任何一个该技能会被跳过并在提示里说明原因。
+
+### 启动时只读元数据
+
+初始化阶段**只读 name 和 description，不读正文**。正文可能很长，一来就全读进内存没必要，
+而且直接塞进 System Prompt 会白占上下文。
+
+### 注入 System Prompt
+
+```
+You have access to the following skills:
+- `撰写通知`: 撰写公司内部通知.
+- `星座运势解读`: 根据星座给出当日运势解读和开运建议.
+Use the `loadSkill` tool to load the full instructions of a skill when needed. You can also load additional files referenced by a skill.
+```
+
+### loadSkill：正文按需加载
+
+| 参数 | 说明 |
+|---|---|
+| `name` | 必需，技能名称 |
+| `filename` | 可选，附件文件的路径或名称 |
+
+- 只给 `name`：返回该技能 `SKILL.md` 全文
+- 同时给 `filename`：读取附件，**不重复返回 SKILL.md**
+
+`filename` 支持三种解释，按顺序尝试：
+
+1. 相对技能目录（如 `references/rules.md`）
+2. 项目相对路径（如 `.agents/skills/xxx/refs/a.md`）
+3. 绝对路径
+
+只给文件名（不含路径分隔符）时，会在该技能目录里递归搜索。
+**同名文件多于一个时返回候选列表**，由模型决定读哪个，不会随便挑一个。
+
+### 路径安全
+
+读取范围**严格限制在该技能目录内部**。`../../config.ini` 这类越权路径会被拒绝并返回
+明确错误，不会读到技能目录外的文件。校验用 `os.path.commonpath` 比对真实路径。
+
+### 与已有工具协作
+
+`loadSkill` 和 `RunCli`、`readFile` 等 15 个工具平级，都走同一个 `Registry` 分发。
+Agent 主流程一行没改，技能只是多了一个工具、多了一段 System Prompt。
+
 
 **两种工具实现方式对照**：`getDate` 必须调本地命令（Windows 没有取时间的 Python 内置接口），
 其余工具基本是纯 Python。文件操作如果改成调命令行，`dir` 要正则切表格、`rd /s /q` 返回值不明确，
@@ -161,6 +229,7 @@ python _test_agent.py      # 16 项：mock 服务下的完整对话流程
 python _test_tui.py        # 11 项：Textual 无头模式下的界面接线
 python _test_web.py        # 46 项：searchWeb / fetchWeb 的全部异常路径
 python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编码
+python _test_skills.py     # 53 项：技能发现、注入、按需加载、路径安全
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

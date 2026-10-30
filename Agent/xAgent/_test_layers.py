@@ -66,7 +66,7 @@ print("=" * 66)
 STD = set(sys.stdlib_module_names)
 # trafilatura 是任务要求用的网页正文提取库，允许出现在 core/tools 里。
 # 它只在 web_tools 内部延迟导入，没装也不影响其他工具。
-ALLOWED_THIRD = {"trafilatura"}
+ALLOWED_THIRD = {"trafilatura", "yaml"}
 third = []
 for path in core_files:
     for mod in imports_of(path):
@@ -134,7 +134,7 @@ sys.path.insert(0, ROOT)
 from core.tools import default_registry
 
 reg = default_registry()
-check("15 个工具", len(reg) == 15, str(len(reg)))
+check("16 个工具", len(reg) == 16, str(len(reg)))
 check("getDate 可用", "2026" in (reg.execute("getDate", {})[0] or ""))
 check("isLeapYear 可用", "不是闰年" in (reg.execute("isLeapYear", {"year": 1900})[0] or ""))
 
@@ -151,7 +151,7 @@ from core.agent import Agent
 
 a = Agent()
 check("Agent 可实例化", a is not None)
-check("Agent 有 15 个工具", len(a.tools) == 15)
+check("Agent 有 16 个工具", len(a.tools) == 16)
 check("Agent 历史为空", a.history == [])
 a.history.append({"role": "user", "content": "x"})
 a.reset()

@@ -5,6 +5,7 @@
     python main.py --tools         只列出工具，不进界面
     python main.py --check         检查配置和工具是否就绪
 """
+import os
 import sys
 
 from core.config import ConfigError, find_config, load
@@ -39,6 +40,23 @@ def check():
 
     reg = default_registry()
     print("[OK] 工具：%d 个" % len(reg))
+
+    from core import skills as skill_store
+
+    found, notes = skill_store.discover()
+    base = skill_store.skills_dir()
+    if found:
+        print("[OK] 技能目录：%s" % base)
+        for s in found:
+            print("     - %s：%s" % (s.name, s.description))
+    elif os.path.isdir(base):
+        print("[!!] 技能目录存在但没有有效技能：%s" % base)
+    else:
+        print("[--] 没有技能目录：%s（不影响使用）" % base)
+
+    for note in notes:
+        print("[!!] %s" % note)
+
     return 0 if ok else 1
 
 
