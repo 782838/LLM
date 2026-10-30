@@ -145,7 +145,7 @@ RunCli(command="python", args=["-c", "print('hi')"])
 ```
 
 **项目根是程序启动时的用户工作目录**（`os.getcwd()`），不是 python.exe 的安装目录，
-也不是代码存放目录。所以在 `D:\LLM` 下启动，就读 `D:\LLM\.agents\skills\`。
+也不是代码存放目录。所以在 `D:\LLM\office` 下启动，就读 `D:\LLM\office\.agents\skills\`。
 
 每个技能目录至少包含一个 `SKILL.md`，开头用 YAML Frontmatter 声明 `name` 和 `description`：
 

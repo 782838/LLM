@@ -52,16 +52,18 @@ xAgent 的联网工具还需要在 `config.ini` 里配一个 `[search]` 小节�
 
 按 Agent Skills 规范实现技能动态加载。
 
-技能放在**项目根**（程序启动时的工作目录）的 `.agents/skills/<技能名>/SKILL.md`：
+技能放在**项目根**（程序启动时的工作目录）的 `.agents/skills/<技能名>/SKILL.md`。
+本仓库把 `office` 当作项目根，所以路径是 `D:\LLM\office\.agents\skills\`：
 
 ```
 D:\LLM\
-└─ .agents\skills\
-   ├─ notice\SKILL.md             撰写通知
-   └─ zodiac-fortune\
-      ├─ SKILL.md                 星座运势解读
-      └─ references\
-         └─ detailed-rules.md     附件：详细规则
+└─ office\                        ← 项目根，从这里启动程序
+   └─ .agents\skills\
+      ├─ notice\SKILL.md             撰写通知
+      └─ zodiac-fortune\
+         ├─ SKILL.md                 星座运势解读
+         └─ references\
+            └─ detailed-rules.md     附件：详细规则
 ```
 
 `SKILL.md` 开头用 YAML Frontmatter 声明 `name` 和 `description`，两个字段都必需。
