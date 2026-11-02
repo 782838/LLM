@@ -199,7 +199,7 @@ print("第 4 步：动态加载原则 + 与已有工具协作")
 print("=" * 72)
 
 reg = default_registry(skills=found, skills_root=SANDBOX)
-check("工具数是 16", len(reg) == 16, str(len(reg)))
+check("工具数是 17", len(reg) == 17, str(len(reg)))
 check("有 loadSkill", "loadSkill" in reg)
 check("原有工具都在", all(
     n in reg for n in ["RunCli", "readFile", "searchWeb", "fetchWeb", "getDate", "isLeapYear"]
@@ -238,12 +238,113 @@ check("Agent 的 system_prompt 含技能清单",
 check("Agent 的 system_prompt 不含正文",
       "标题必须带部门名" not in agent.system_prompt)
 check("Agent 的工具有 loadSkill", "loadSkill" in agent.tools)
+check("Agent 的工具有 createSkill", "createSkill" in agent.tools)
 check("messages() 带上 system 消息",
       agent.messages() and agent.messages()[0]["role"] == "system",
       str(agent.messages()[:1]))
 
 agent2 = Agent(auto_load_skills=False)
 check("可关闭自动加载", agent2.skills == [] and agent2.system_prompt == "")
+
+print()
+print("=" * 72)
+print("第 5 步：createSkill")
+print("=" * 72)
+
+VALID_CTX = """---
+name: 会议纪要
+description: 整理会议纪要并提取待办事项
+---
+
+# 会议纪要规范
+
+1. 记录会议时间、地点、参会人
+2. 讨论要点
+3. 待办事项含负责人和截止日期
+"""
+
+# 重建一个干净的注册表来测创建
+CRE_ROOT = tempfile.mkdtemp(prefix="create_")
+created_skills = []
+cre_reg = default_registry(skills=created_skills, skills_root=CRE_ROOT)
+
+check("createSkill 已注册", "createSkill" in cre_reg)
+
+r, err = cre_reg.execute("createSkill", {"name": "meeting-notes", "skillContext": VALID_CTX})
+check("正常创建成功", err is None and "已创建技能" in (r or ""), (r or err or "")[:120])
+
+new_dir = os.path.join(CRE_ROOT, ".agents", "skills", "meeting-notes")
+new_file = os.path.join(new_dir, "SKILL.md")
+check("目录已创建", os.path.isdir(new_dir), new_dir)
+check("SKILL.md 已写入", os.path.isfile(new_file), new_file)
+
+written = open(new_file, encoding="utf-8").read()
+check("写入内容以 --- 开头", written.startswith("---"), written[:20])
+check("写入内容含 name", "name: 会议纪要" in written)
+check("写入内容含 description", "description:" in written)
+check("写入内容含正文", "待办事项含负责人" in written)
+check("换行统一为 \\n", "\r\n" not in written)
+
+# 已存在不覆盖
+r2, _ = cre_reg.execute("createSkill", {"name": "meeting-notes", "skillContext": VALID_CTX})
+check("重复创建被拒绝", "已经存在" in (r2 or ""), (r2 or "")[:100])
+check("原文件内容没被改动",
+      open(new_file, encoding="utf-8").read() == written)
+
+# 立即生效
+check("创建后注册进内存列表", len(created_skills) == 1, str(len(created_skills)))
+r3, err3 = cre_reg.execute("loadSkill", {"name": "会议纪要"})
+check("创建后立即能 loadSkill", err3 is None and "待办事项含负责人" in (r3 or ""), (r3 or "")[:100])
+
+# 递归扫描也能扫到
+found2, _ = S.discover(CRE_ROOT)
+check("重新 discover 能扫到新建技能", len(found2) == 1 and found2[0].name == "会议纪要")
+
+# 名称校验
+print()
+print("-- 名称格式 --")
+for bad in ["BadName", "bad_name", "bad name", "中文名", "../evil", "a/b", "-lead"]:
+    r4, _ = cre_reg.execute("createSkill", {"name": bad, "skillContext": VALID_CTX})
+    check("拒绝非法名 %r" % bad, "不符合规范" in (r4 or ""), (r4 or "")[:60])
+
+r5, _ = cre_reg.execute("createSkill", {"name": "ok-name-2", "skillContext": VALID_CTX})
+check("接受合法名 ok-name-2", "已创建技能" in (r5 or ""), (r5 or "")[:80])
+
+# 内容校验
+print()
+print("-- skillContext 校验 --")
+bad_ctxs = [
+    ("缺 content", None),
+    ("无 frontmatter", "正文内容"),
+    ("缺 name", "---\ndescription: x\n---\n正文"),
+    ("缺 description", "---\nname: x\n---\n正文"),
+    ("无正文", "---\nname: x\ndescription: y\n---\n"),
+    ("空串", ""),
+]
+for label, ctx in bad_ctxs:
+    args = {"name": "test-" + str(abs(hash(label)) % 10000)}
+    if ctx is not None:
+        args["skillContext"] = ctx
+    out, _ = cre_reg.execute("createSkill", args)
+    first = (out or "").splitlines()[0]
+    rejected = any(k in (out or "") for k in ("缺少", "Frontmatter", "没有正文"))
+    check("拒绝%s" % label, rejected, first[:70])
+
+# 被拒绝的都不该落盘
+skills_now = sorted(os.listdir(os.path.join(CRE_ROOT, ".agents", "skills")))
+check("被拒绝的没有留下目录",
+      all(d in ("meeting-notes", "ok-name-2") for d in skills_now), str(skills_now))
+
+# 参数声明
+schema = [s for s in cre_reg.schemas() if s["function"]["name"] == "createSkill"][0]
+props = schema["function"]["parameters"]["properties"]
+check("createSkill 有 name 参数", "name" in props)
+check("createSkill 有 skillContext 参数", "skillContext" in props)
+check("两个参数都必需",
+      set(schema["function"]["parameters"]["required"]) == {"name", "skillContext"},
+      str(schema["function"]["parameters"]["required"]))
+
+shutil.rmtree(CRE_ROOT, ignore_errors=True)
 
 print()
 print("=" * 72)

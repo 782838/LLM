@@ -7,7 +7,7 @@
 - **AnythingLLMServer** —— 单文件网页上传文档，让 AnythingLLM 完成向量化。
 - **Agent/Practice01** —— `chat.py`，和大模型循环对话：流式打字机输出，每轮把全部聊天记录发给模型。
 - **Agent/Practice02** —— `chat.py`，在 Practice01 基础上加 function call：模型自己决定调工具，共 12 个函数。
-- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行和技能加载能力，共 16 个工具。
+- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行和技能加载/创建能力，共 17 个工具。
 
 Practice01 / Practice02 用法：复制 `config.example.ini` 为 `config.ini`，填自己的接口地址、模型名、密钥，然后 `python chat.py`。
 
@@ -39,12 +39,13 @@ xAgent 的联网工具还需要在 `config.ini` 里配一个 `[search]` 小节�
 
 ## xAgent 的工具清单
 
-比 Practice02 多四个工具，共 16 个。前 12 个与上面相同，另外四个是：
+比 Practice02 多五个工具，共 17 个。前 12 个与上面相同，另外五个是：
 
 - `searchWeb` —— 调百度千帆 AI 搜索，返回搜索摘要和参考来源的标题、链接、站点、时间。API Key 从 `config.ini` 的 `[search]` 小节读 `baidu_qianfan_api_key`，不在代码里硬编码。
 - `fetchWeb` —— 用 `subprocess` 调本地 `curl` 抓网页 HTML，再用 `trafilatura` 提取正文转 Markdown。保留标题、段落、列表、表格、链接，去掉导航栏、广告、页脚。curl 走参数列表方式，不用 `shell=True`。
 - `RunCli` —— 在本机执行任意命令行程序。接收 `command`（程序名）和 `args`（参数数组），用 `subprocess.run([程序名] + 参数, shell=False)` 执行，返回退出码、标准输出、标准错误。默认 30 秒超时，输出超过 4000 字符会截断并标明原始长度。
 - `loadSkill` —— 按需加载某个技能的完整说明或它引用的附件文件。只传 `name` 返回 `SKILL.md` 全文，同时传 `filename` 读附件。读取范围严格限制在该技能目录内部。
+- `createSkill` —— 让模型自己创建新技能，在 `.agents/skills/<name>/` 下生成 `SKILL.md`。技能名只允许小写字母、数字和连字符；内容必须包含 YAML Frontmatter（`name`、`description`）和正文；已存在的不覆盖；附件目录由模型继续调 `createDirectory`、`createFile` 补充。
 
 这几个工具都把错误转成给模型看的文本，不抛异常打断对话：缺 Key、Key 是占位符、HTTP 401/403/429/5xx、网络不可达、超时、域名解析失败、JS 渲染页提取不到正文、HTML 解析失败、正文超长截断、程序不存在、参数类型不对、技能不存在、路径越权，各有对应的清晰提示。
 
@@ -85,7 +86,7 @@ Agent/xAgent/
 │  ├─ config.py   配置读取，支持 [search] 小节
 │  ├─ skills.py   技能发现、System Prompt 注入、按需加载
 │  ├─ llm/        流式请求与 tool_calls 分片归并
-│  └─ tools/      16 个工具
+│  └─ tools/      17 个工具
 ├─ tui/           Textual 界面，只做显示和输入
 └─ interfaces/    界面契约，说明新界面要实现哪 6 个回调
 ```

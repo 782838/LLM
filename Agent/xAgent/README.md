@@ -96,7 +96,7 @@ python main.py --check
 
 **左侧边栏**：模型名、工具清单（前 6 个）、技能清单（前 6 个）、会话轮数。技能加载有问题时用 `!` 标出。
 
-## 16 个工具
+## 17 个工具
 
 时间与历法：
 
@@ -234,14 +234,62 @@ Use the `loadSkill` tool to load the full instructions of a skill when needed. Y
 只给文件名（不含路径分隔符）时，会在该技能目录里递归搜索。
 **同名文件多于一个时返回候选列表**，由模型决定读哪个，不会随便挑一个。
 
+### createSkill：让模型自己建技能
+
+| 参数 | 说明 |
+|---|---|
+| `name` | 必需，技能名，同时是目录名 |
+| `skillContext` | 必需，`SKILL.md` 的完整内容 |
+
+在 `<项目根>/.agents/skills/<name>/SKILL.md` 生成文件。四条约束：
+
+**1. 技能名格式**
+
+只允许小写字母、数字和连字符，必须以字母或数字开头：
+
+```
+✓ my-skill    ✓ notice-v2
+✗ MySkill     ✗ my_skill     ✗ ../evil
+```
+
+正则 `^[a-z0-9][a-z0-9-]*$` 一条规则同时管住了格式规范和路径穿越 ——
+名字里不可能出现 `/` 或 `..`，天然无法逃出技能目录。
+
+**2. 内容校验**
+
+作业要求 `SKILL.md` 必须包含「正确的 YAML Frontmatter、name、description 及正文」，
+四项逐条检查，缺任何一项都返回明确提示让模型改，不会落盘：
+
+| 不合法情况 | 处理 |
+|---|---|
+| `skillContext` 不以 `---` 开头 | 拒绝，给出正确格式示例 |
+| YAML 头部缺 `name` | 拒绝 |
+| YAML 头部缺 `description` | 拒绝 |
+| 只有头部没有正文 | 拒绝 |
+| YAML 语法错 | 拒绝，附错误原因 |
+
+**3. 已存在不覆盖**
+
+直接返回提示，附上现有路径，建议先 `deleteDirectory` 或换个名字。原文件一个字节都不动。
+
+**4. 附件目录不归它管**
+
+`references/`、`scripts/` 这些子目录和辅助文件，由模型创建完技能后继续调
+`createDirectory`、`createFile` 补。`createSkill` 只管 `SKILL.md`，单一职责。
+
 ### 路径安全
 
 读取范围**严格限制在该技能目录内部**。`../../config.ini` 这类越权路径会被拒绝并返回
 明确错误，不会读到技能目录外的文件。校验用 `os.path.commonpath` 比对真实路径。
 
+### 新建技能立即生效
+
+`createSkill` 写入文件后会把它追加进内存里的技能列表，`loadSkill` 马上就能查到，
+不用重启。同一个列表通过闭包同时传给两个工具，两边看到的是同一份数据。
+
 ### 与已有工具协作
 
-`loadSkill` 和 `RunCli`、`readFile` 等 15 个工具平级，都走同一个 `Registry` 分发。
+`createSkill`、`loadSkill` 和 `RunCli`、`readFile` 等工具平级，都走同一个 `Registry` 分发。
 Agent 主流程一行没改，技能只是多了一个工具、多了一段 System Prompt。
 
 
@@ -270,7 +318,7 @@ python _test_agent.py      # 16 项：mock 服务下的完整对话流程
 python _test_tui.py        # 24 项：Textual 无头模式下的界面接线
 python _test_web.py        # 46 项：searchWeb / fetchWeb 的全部异常路径
 python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编码
-python _test_skills.py     # 53 项：技能发现、注入、按需加载、路径安全
+python _test_skills.py     # 86 项：技能发现、注入、按需加载、创建、路径安全
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

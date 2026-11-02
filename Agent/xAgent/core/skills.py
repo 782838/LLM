@@ -19,8 +19,12 @@
 
 4. loadSkill 的读取范围严格限制在该技能目录内部，
    防止 ../ 之类的路径解析错误读到别处文件。
+
+5. createSkill 让模型能自己建技能。技能名只允许小写字母、数字和连字符，
+   这条规则同时管住了格式规范和路径穿越两件事。
 """
 import os
+import re
 
 SKILL_FILE = "SKILL.md"
 SKILLS_DIRNAME = os.path.join(".agents", "skills")
@@ -390,3 +394,163 @@ def describe(skills):
     if not skills:
         return "无技能"
     return "%d 个技能：%s" % (len(skills), "、".join(s.name for s in skills))
+
+
+# ---------------------------------------------------------------- createSkill
+
+# 技能名只能是「小写字母、数字、连字符」，这条规则同时满足格式要求和路径安全
+NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MAX_NAME_LEN = 64
+
+
+def validate_name(name):
+    """校验技能名。返回 (规范化后的名字, 错误信息)。"""
+    if not name or not str(name).strip():
+        return None, "缺少 name 参数。请给出技能名称，只能用小写字母、数字和连字符。"
+
+    raw = str(name).strip()
+
+    if len(raw) > MAX_NAME_LEN:
+        return None, "技能名太长（%d 字符），上限 %d。" % (len(raw), MAX_NAME_LEN)
+
+    if not NAME_PATTERN.match(raw):
+        return None, (
+            "技能名「%s」不符合规范。只能用**小写字母、数字和连字符**，"
+            "且必须以字母或数字开头，例如 my-skill、notice-v2。"
+            "不能用大写、下划线、空格、中文，也不能含 / 或 .. 这类路径字符。" % raw
+        )
+
+    return raw, None
+
+
+def validate_context(context):
+    """校验 skillContext。返回 (解析出的元数据, 正文, 错误信息)。
+
+    作业要求的四项：正确的 YAML Frontmatter、name、description、正文内容。
+    """
+    if not context or not str(context).strip():
+        return None, None, (
+            "缺少 skillContext 参数。请传入 SKILL.md 的完整内容，"
+            "包括 YAML Frontmatter 和正文。"
+        )
+
+    text = str(context)
+
+    if not text.lstrip("\ufeff").startswith("---"):
+        return None, None, (
+            "skillContext 缺少 YAML Frontmatter。"
+            "文件必须以 --- 开头，头部声明 name 和 description，例如：\n\n"
+            "---\nname: 示例技能\ndescription: 一句话说明用途\n---\n\n正文内容……"
+        )
+
+    try:
+        meta, body = parse_frontmatter(text)
+    except SkillError as e:
+        return None, None, "skillContext 的 YAML 头部有问题：%s" % e
+
+    if not meta:
+        return None, None, (
+            "skillContext 的 YAML 头部是空的，或者没有用 --- 正确闭合。"
+            "头部至少要写 name 和 description。"
+        )
+
+    meta_name = str(meta.get("name") or "").strip()
+    if not meta_name:
+        return None, None, "skillContext 的 YAML 头部缺少 name 字段。"
+
+    meta_desc = str(meta.get("description") or "").strip()
+    if not meta_desc:
+        return None, None, "skillContext 的 YAML 头部缺少 description 字段。"
+
+    if not body.strip():
+        return None, None, (
+            "skillContext 只有 YAML 头部，没有正文。"
+            "请在 --- 之后写上这个技能的具体规则。"
+        )
+
+    return meta, body, None
+
+
+def create_skill(name=None, skill_context=None, root=None, skills=None):
+    """createSkill 工具的实现。
+
+    在 <项目根>/.agents/skills/<name>/ 下创建 SKILL.md。
+
+    不覆盖已有技能；附件目录（references/ scripts/ 等）不归这里管，
+    由模型继续调用 fileOps 工具完成。
+    """
+    # 1. 校验技能名
+    safe_name, err = validate_name(name)
+    if err:
+        return err, None
+
+    # 2. 校验内容
+    meta, body, err = validate_context(skill_context)
+    if err:
+        return err, None
+
+    base = skills_dir(root)
+    target_dir = os.path.join(base, safe_name)
+    target_file = os.path.join(target_dir, SKILL_FILE)
+
+    # 3. 已存在就不动。先看目录，再看文件，覆盖两种情况
+    if os.path.isdir(target_dir) or os.path.exists(target_file):
+        return (
+            "技能「%s」已经存在，没有覆盖。\n"
+            "目录：%s\n"
+            "如果确实要重建，请先调用 deleteDirectory 删掉它，或者换一个名字。"
+            % (safe_name, target_dir)
+        ), None
+
+    # 4. 兜底校验路径没跑出技能根目录（正则已挡住，这里是双保险）
+    if not _within(target_dir, base):
+        return "拒绝创建：目标路径超出了技能目录范围。", None
+
+    # 5. 写文件
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+        # 统一用 \n 换行，避免跨平台差异
+        content = str(skill_context).replace("\r\n", "\n").lstrip("\ufeff")
+        with open(target_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+    except OSError as e:
+        return "创建技能失败：%s" % e, None
+
+    # 6. 注册到内存里的技能列表，当前会话立刻可用
+    skill = Skill(
+        name=str(meta.get("name")).strip(),
+        description=str(meta.get("description")).strip(),
+        skill_md=target_file,
+        directory=target_dir,
+    )
+    notes = []
+    if skills is not None:
+        exists = any(s.directory == target_dir for s in skills)
+        if not exists:
+            skills.append(skill)
+
+    note = ""
+    if meta.get("name") and str(meta.get("name")).strip() != safe_name:
+        note = (
+            "\n（目录名是 %s，YAML 里的显示名是「%s」，两者不一致，按现有惯例允许。）"
+            % (safe_name, str(meta.get("name")).strip())
+        )
+
+    body_lines = len(body.strip().splitlines())
+    return (
+        "已创建技能「%s」。\n"
+        "目录：%s\n"
+        "文件：%s\n"
+        "正文：%d 行\n"
+        "当前会话已生效，可以直接用 loadSkill 加载它。%s\n\n"
+        "如果需要 references/、scripts/ 之类的附件目录，"
+        "请继续调用 createDirectory 和 createFile 补上。"
+        % (
+            str(meta.get("name")).strip(),
+            target_dir,
+            target_file,
+            body_lines,
+            note,
+        )
+    ), skill
+
