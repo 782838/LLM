@@ -96,7 +96,7 @@ python main.py --check
 
 **左侧边栏**：模型名、工具清单（前 6 个）、技能清单（前 6 个）、会话轮数。技能加载有问题时用 `!` 标出。
 
-## 17 个工具
+## 19 个工具
 
 时间与历法：
 
@@ -159,6 +159,62 @@ RunCli(command="python", args=["-c", "print('hi')"])
 `args` 传字符串时会当成**单个参数**处理，不按空格切分 —— 一旦切分就等于在做命令拼接。
 
 **这个工具不做命令白名单**，按当前用户权限执行，仅用于受控教学环境。
+
+## Office 文档：officeDoc / officeHelp
+
+底层用 [officecli](D:\LLM\tools\officecli) —— 一个单文件 CLI，不用装 Office 就能读写
+`.docx` / `.xlsx` / `.pptx`。
+
+### 为什么只包两个工具
+
+officecli 的命令有几十条子命令、几百个属性（`add` / `set` / `get` / `query` / `view` /
+`batch` / `raw` 等）。**给每条子命令各写一个工具，会有几十个工具挤在上下文里，模型反而选不过来**。
+
+所以只包两个：
+
+| 工具 | 作用 |
+|---|---|
+| `officeDoc` | 统一入口，`args` 传参数数组，原样转发给 officecli |
+| `officeHelp` | 专查语法，把官方帮助文档暴露给模型 |
+
+文档里明确写了「不确定属性名就先跑 help」，所以把 help 单独做成工具，让模型有地方查。
+
+### 用法
+
+```python
+officeDoc(args=["create", "deck.pptx"])
+officeDoc(args=["add", "deck.pptx", "/", "--type", "slide",
+                "--prop", "title=季度汇报"])
+officeDoc(args=["add", "deck.pptx", "/slide[1]", "--type", "shape",
+                "--prop", "text=营收增长 25%", "--prop", "x=2cm", "--prop", "y=5cm"])
+officeDoc(args=["view", "deck.pptx", "outline"])
+```
+
+`args` 是数组而不是整条命令字符串，因此路径里的 `[` `]`、参数里的空格都不用转义。
+
+### 执行环境
+
+| 项 | 做法 |
+|---|---|
+| 可执行文件 | 先查 PATH，再找 `D:\LLM\tools\officecli\officecli-win-x64.exe` |
+| 常驻进程 | 设 `OFFICECLI_NO_AUTO_RESIDENT=1`，避免留下后台进程占着文件 |
+| 立即落盘 | 设 `OFFICECLI_RESIDENT_FLUSH=each`，防止别的程序读到旧内容 |
+| 超时 | 默认 60 秒，上限 300 秒 |
+| 输出截断 | 4000 字符 |
+
+### 配套技能
+
+`office/skills/office-docs/SKILL.md` 写了三个最小可用流程（PPT / Word / Excel）、
+路径写法、常用命令和踩坑清单。模型加载这个技能后就知道该怎么拼命令，
+不用每次从零摸索。
+
+### 实测
+
+| 格式 | 验证方式 | 结果 |
+|---|---|---|
+| PPT | `python-pptx` 读回 | 2 页，标题和正文文字都对 |
+| Word | `python-docx` 读回 | 2 段，Heading 1 样式生效 |
+| Excel | `officecli get --json` 读回 | 单元格值正确，bold 属性保留 |
 
 ### 异常处理
 
@@ -319,6 +375,7 @@ python _test_tui.py        # 24 项：Textual 无头模式下的界面接线
 python _test_web.py        # 46 项：searchWeb / fetchWeb 的全部异常路径
 python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编码
 python _test_skills.py     # 86 项：技能发现、注入、按需加载、创建、路径安全
+python _test_office.py     # 46 项：officeDoc / officeHelp，真实生成三种文档
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

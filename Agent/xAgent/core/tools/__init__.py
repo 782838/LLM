@@ -13,6 +13,7 @@ def default_registry(skills=None, skills_root=None):
         cli_tools,
         datetime_tools,
         file_tools,
+        office_tools,
         search_tools,
         skill_tools,
         web_tools,
@@ -25,6 +26,7 @@ def default_registry(skills=None, skills_root=None):
         web_tools,
         search_tools,
         cli_tools,
+        office_tools,
     )
     for group in groups:
         for tool in group.build_tools():
