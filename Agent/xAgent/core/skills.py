@@ -127,8 +127,13 @@ def project_root():
     """项目根 = 程序启动时的用户工作目录。
 
     这是作业明确要求的：不是 python.exe 安装目录，也不是代码存放目录。
+    但 cwd 下没有技能和 MCP 配置时，会往上翻几层找（见 core/project.py），
+    避免从子目录启动就什么都扫不到。
     """
-    return os.path.abspath(os.getcwd())
+    from .project import find_project_root
+
+    root, _note = find_project_root(os.getcwd())
+    return root
 
 
 def skills_dir(root=None):

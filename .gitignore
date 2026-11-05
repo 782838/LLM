@@ -17,3 +17,6 @@ config.ini
 Agent/启动本地模型.bat
 Agent/*/启动本地模型.bat
 .idea/
+
+# 本机记住的项目根路径，跟机器绑定，不该入库
+.last-project-root

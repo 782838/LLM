@@ -48,15 +48,21 @@ class ServerConfig:
 
 
 def config_path(root=None):
-    """返回 .mcp.json 的绝对路径。"""
-    return os.path.join(root or os.getcwd(), CONFIG_NAME)
+    """返回 .mcp.json 的绝对路径。
+
+    root 没指定时用项目根定位（cwd 找不到会往上翻，见 core/project.py）。
+    """
+    if root is None:
+        from ..project import find_project_root
+
+        root, _note = find_project_root(os.getcwd())
+    return os.path.join(root, CONFIG_NAME)
 
 
 def find_config(root=None):
     """找 .mcp.json，找不到返回 None。"""
     path = config_path(root)
     return path if os.path.isfile(path) else None
-
 
 def parse_server(name, raw):
     """解析单个 Server 配置。返回 (ServerConfig, 错误信息)。"""

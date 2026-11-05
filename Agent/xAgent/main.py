@@ -66,7 +66,10 @@ def check():
         print("[--] 没有 .mcp.json：%s（不影响使用）" % mcp_config.config_path())
     else:
         print("[OK] MCP 配置：%s" % mcp_cfg)
-        mgr = McpManager(root=os.getcwd())
+        from core.project import find_project_root
+
+        mcp_root, _note = find_project_root()
+        mgr = McpManager(root=mcp_root)
         try:
             mgr.connect_all()
             for line in mgr.status_lines():

@@ -9,10 +9,12 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Static
 
+from core import models as models_mod
 from core.agent import Agent
 from core.config import find_config, load, ConfigError
 
 from . import events
+from .model_picker import ModelPicker
 from .widgets import Conversation, PromptInput, Sidebar
 
 CSS = """
@@ -122,6 +124,7 @@ class XAgentApp(App):
     BINDINGS = [
         Binding("ctrl+c", "quit", "退出", show=True),
         Binding("ctrl+n", "new_session", "新会话", show=True),
+        Binding("ctrl+m", "pick_model", "模型", show=True),
         Binding("ctrl+l", "clear", "清屏", show=True),
         Binding("f1", "show_tools", "工具", show=True),
         Binding("f2", "show_skills", "技能", show=True),
@@ -298,6 +301,61 @@ class XAgentApp(App):
         for s in skills:
             lines.append("  · %s —— %s" % (s.name, s.description))
         conv.add_system("\n".join(lines))
+
+    # ---- 切换模型 ----
+    def action_pick_model(self):
+        """Ctrl+M：弹出模型选择器。"""
+        conv = self.query_one(Conversation)
+        if self._busy:
+            conv.add_system("上一轮还没结束，稍等一下再换模型。")
+            return
+
+        cfg = self._agent.config
+        conv.add_system("正在获取可用模型…")
+
+        def fetch():
+            return models_mod.list_models(cfg)
+
+        self.run_worker(fetch, thread=True, exclusive=False,
+                        name="list-models", group="models")
+
+    def on_worker_state_changed(self, event):
+        """拿到模型列表后弹选择器。"""
+        from textual.worker import WorkerState
+
+        if event.worker.name != "list-models":
+            return
+        if event.state != WorkerState.SUCCESS:
+            return
+
+        models, note = event.worker.result
+        current = self._agent.config.model
+
+        def apply(chosen):
+            if chosen:
+                self._switch_model(chosen)
+
+        self.push_screen(ModelPicker(models, current, note), apply)
+
+    def _switch_model(self, model_id):
+        """切到指定模型：改内存里的配置，写回 config.ini，重置会话。"""
+        conv = self.query_one(Conversation)
+        old = self._agent.config.model
+        if model_id == old:
+            conv.add_system("模型没变，还是 %s" % model_id)
+            return
+
+        ok, detail = models_mod.save_model(model_id)
+        self._agent.config.model = model_id
+        self._agent.reset()
+        conv.add_system(
+            "已切换到 %s（原 %s）%s\n会话历史已清空，避免旧上下文干扰新模型。"
+            % (model_id, old, "，配置已写回 " + detail if ok else "，但写回配置失败：" + detail)
+        )
+        sb = self.query_one(Sidebar)
+        sb.setup(model_id, self._agent.tool_names(), self._agent.skills,
+                 self._agent.skill_notes)
+        self._set_status()
 
 
 def run(config_path=None):

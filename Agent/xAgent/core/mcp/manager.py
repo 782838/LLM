@@ -23,7 +23,12 @@ class McpManager:
     """管所有 MCP Server 的连接和工具。"""
 
     def __init__(self, root=None, runner=None):
-        self.root = root or os.getcwd()
+        # root 没指定时用项目根定位（会处理兄弟目录的情况，见 core/project.py）
+        if root is None:
+            from ..project import find_project_root
+
+            root, _note = find_project_root(os.getcwd())
+        self.root = root
         self._runner = runner
         self._owns_runner = runner is None
         self.servers = []
