@@ -149,7 +149,7 @@ check("分片拼接", len(ready) == 1 and ready[0]["arguments"] == '{"path": "a.
 
 from core.agent import Agent
 
-a = Agent()
+a = Agent(auto_load_mcp=False)
 check("Agent 可实例化", a is not None)
 check("Agent 有 19 个工具", len(a.tools) == 19)
 check("Agent 历史为空", a.history == [])

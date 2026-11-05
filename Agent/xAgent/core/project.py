@@ -66,6 +66,38 @@ def recalled_root():
     return None
 
 
+def _scan_siblings(base, max_depth=2):
+    """从 base 往上走两三层，在每一层的兄弟目录里找带标记的。
+
+    处理这种情况：
+        D:\\LLM\\office\\           ← 配置在这
+        D:\\LLM\\Agent\\xAgent\\    ← 程序在这
+    xAgent 往上翻找不到 office（兄弟关系），但从 D:\\LLM 这一层
+    往下看一层就能看到 office。
+
+    只扫很浅的层级，且限制目录数量，不会卡住。
+    """
+    current = base
+    for _ in range(max_depth):
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+
+        try:
+            entries = sorted(os.listdir(current))
+        except OSError:
+            continue
+
+        for name in entries[:50]:        # 最多看 50 个兄弟目录
+            sibling = os.path.join(current, name)
+            if not os.path.isdir(sibling):
+                continue
+            if _has_any_marker(sibling):
+                return sibling
+    return None
+
+
 def find_project_root(start=None, max_up=MAX_UP_LEVELS):
     """定位项目根。返回 (路径, 说明)。"""
     base = os.path.abspath(start or os.getcwd())
@@ -90,5 +122,11 @@ def find_project_root(start=None, max_up=MAX_UP_LEVELS):
     last = recalled_root()
     if last is not None:
         return last, "上次使用的目录（当前目录往上都没有配置）"
+
+    # 4. 扫一遍附近的兄弟目录，找到就记住
+    found = _scan_siblings(base)
+    if found is not None:
+        remember_root(found)
+        return found, "在附近的兄弟目录里找到（%s）" % os.path.basename(found)
 
     return base, "当前目录（没找到技能或 MCP 配置）"

@@ -141,6 +141,28 @@ root, note = project_mod.find_project_root(sibling)
 check("兄弟目录能召回上次的根", root == os.path.abspath(ROOT), root)
 check("说明提到上次使用", "上次" in note, note)
 
+# 没有记忆文件时，靠扫描兄弟目录也能找到
+# 造一个和程序目录同级的结构
+PARENT = tempfile.mkdtemp(prefix="scan_")
+TARGET = os.path.join(PARENT, "office")
+os.makedirs(os.path.join(TARGET, ".agents", "skills"), exist_ok=True)
+with open(os.path.join(TARGET, ".mcp.json"), "w", encoding="utf-8") as f:
+    json.dump({"mcpServers": {}}, f)
+
+# 程序在它的兄弟目录里
+APP_DIR = os.path.join(PARENT, "app", "inner")
+os.makedirs(APP_DIR, exist_ok=True)
+
+# 先清掉记忆，逼它去扫描
+_state1 = project_mod._state_path()
+if os.path.isfile(_state1):
+    os.remove(_state1)
+
+root, note = project_mod.find_project_root(APP_DIR)
+check("无记忆时能扫到兄弟目录", root == os.path.abspath(TARGET), root)
+check("说明提到兄弟目录", "兄弟" in note or "附近" in note, note)
+
+shutil.rmtree(PARENT, ignore_errors=True)
 shutil.rmtree(ROOT, ignore_errors=True)
 shutil.rmtree(EMPTY, ignore_errors=True)
 shutil.rmtree(sibling, ignore_errors=True)
