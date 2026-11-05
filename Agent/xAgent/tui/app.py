@@ -152,6 +152,15 @@ class XAgentApp(App):
         self._setup_agent()
         self.query_one("#prompt", PromptInput).focus()
 
+    def on_unmount(self):
+        """退出时关掉 MCP 会话，别留后台线程。"""
+        agent = self._agent
+        if agent is not None:
+            try:
+                agent.close()
+            except Exception:
+                pass
+
     # ---- 初始化 ----
     def _setup_agent(self):
         conv = self.query_one(Conversation)
@@ -188,6 +197,13 @@ class XAgentApp(App):
         conv.add_system(
             "输入问题后回车发送。技能从 .agents/skills/ 加载，正文按需通过 loadSkill 拉取。"
         )
+        # MCP 连接情况单独提示，方便确认 .mcp.json 有没有被扫到
+        if self._agent.mcp is not None:
+            conv.add_system("MCP：%s" % self._agent.mcp_summary())
+            for line in self._agent.mcp.status_lines():
+                conv.add_system("  " + line)
+            for note in self._agent.mcp_notes:
+                conv.add_system("  ! " + note)
         self._set_status()
 
     def _set_status(self, override=None):

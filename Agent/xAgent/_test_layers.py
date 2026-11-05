@@ -66,7 +66,7 @@ print("=" * 66)
 STD = set(sys.stdlib_module_names)
 # trafilatura 是任务要求用的网页正文提取库，允许出现在 core/tools 里。
 # 它只在 web_tools 内部延迟导入，没装也不影响其他工具。
-ALLOWED_THIRD = {"trafilatura", "yaml"}
+ALLOWED_THIRD = {"trafilatura", "yaml", "mcp"}
 third = []
 for path in core_files:
     for mod in imports_of(path):

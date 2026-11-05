@@ -14,12 +14,24 @@ xAgent/
 ├─ core/                  业务逻辑（不依赖界面）
 │  ├─ agent.py            编排：模型 + 工具 + 会话历史
 │  ├─ config.py           配置读取
+│  ├─ skills.py           技能发现、注入、创建、按需加载
+│  ├─ mcp/                MCP Client
+│  │  ├─ config.py        读 .mcp.json
+│  │  ├─ runner.py        后台事件循环（同步↔异步桥接）
+│  │  ├─ client.py        stdio / streamable_http 会话
+│  │  ├─ adapter.py       工具名映射 + 结果归一化
+│  │  └─ manager.py       统一管理和故障隔离
 │  ├─ llm/
 │  │  └─ client.py        流式请求、SSE 解析、tool_calls 分片归并
 │  └─ tools/
 │     ├─ registry.py      工具注册表与分发
 │     ├─ datetime_tools.py  getDate / isLeapYear
 │     ├─ file_tools.py     10 个本地文件操作
+│     ├─ web_tools.py      fetchWeb
+│     ├─ search_tools.py   searchWeb
+│     ├─ cli_tools.py      RunCli
+│     ├─ office_tools.py   officeDoc / officeHelp
+│     ├─ skill_tools.py    loadSkill / createSkill
 │     └─ fsutil.py         路径与文本读取的公共辅助
 ├─ tui/                   终端界面（Textual）
 │  ├─ app.py              主应用，布局与事件接线
@@ -366,6 +378,126 @@ URL 里的 `&`、`?` 等字符不会被 shell 解释，避免命令注入。
 **流式 tool_calls 按 index 归并**：分片可能一次只给 id、下一次只给 arguments 的一小段，
 必须攒齐再执行。
 
+## MCP Client
+
+让 Agent 能连外部 MCP Server，把对方的工具当成自己的工具用。
+
+### 配置
+
+在**项目根**（程序启动时的工作目录）放一个 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "Bazi-MCP": {
+      "type": "streamable_http",
+      "url": "https://mcp.api-inference.modelscope.net/4a3222faa31a4e/mcp"
+    },
+    "PetHospitalMCP": {
+      "type": "streamable_http",
+      "url": "http://127.0.0.1:8090/mcp"
+    },
+    "本地脚本": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["server.py"],
+      "env": {"MCP_PORT": "8092"}
+    }
+  }
+}
+```
+
+支持两种协议：
+
+| type | 必填 | 说明 |
+|---|---|---|
+| `streamable_http`（或 `streamable-http`） | `url` | 远程或本地的 HTTP MCP Server |
+| `stdio` | `command`、`args` | 本地子进程，走标准输入输出 |
+
+没写 `type` 时按有无 `url` 自动判断。
+
+### 工具命名
+
+MCP 工具统一加服务器前缀，避免和本地 19 个工具撞名：
+
+```
+Bazi-MCP__getBaziDetail
+PetHospitalMCP__query_pets
+```
+
+内部维护 `暴露名 → (服务器名, 原工具名)` 的映射，调用时反查后转发。
+
+### 同步调异步
+
+这是整个实现最关键的地方。
+
+现有 xAgent 全是同步的，而 MCP SDK 全是 async。`Registry.execute()` 是普通函数，没法 `await`。
+
+做法是起一个后台线程常驻一个事件循环：
+
+```
+主线程（同步）                      后台线程（异步）
+     │                                   │
+     ├─ runner.run(coro) ───────────────►│ 事件循环在执行
+     │                                   │
+     │◄────────────── 结果 ──────────────┤
+     │                                   │
+```
+
+MCP 会话常驻在这个循环里，不用每次调用都重连。
+
+**为什么不能每次调用起新循环**：`stdio_client` 和 `streamable_http_client` 都是
+async context manager，`async with` 退出就断连。每次新建循环等于每次重新握手，
+stdio 还要反复启停子进程，很慢。
+
+### 结果归一化
+
+MCP 的 `CallToolResult` 有四种内容形态，统一转成文本给模型：
+
+| 内容类型 | 处理 |
+|---|---|
+| `TextContent` | 直接取文本 |
+| `ImageContent` | 转成 `[图片 image/png，base64 长度 N]` |
+| `AudioContent` | 同理 |
+| `EmbeddedResource` | 取 uri 和内容 |
+| `structuredContent` | 转 JSON 字符串附在后面 |
+| `isError=True` | 当错误返回，让模型知道工具执行失败 |
+
+### 故障隔离
+
+每个 Server 独立连接，一个失败只记一笔，不中断其他：
+
+```
+Bazi-MCP        连接成功 → 注册 3 个工具
+SomeServer      连接超时 → 记录「连接失败：TimeoutError」
+AnotherServer   握手失败 → 记录「连接失败：...」
+```
+
+结果：19 个本地工具照常可用，连上的 MCP 工具也能用。
+
+### 对外接口
+
+```python
+from core.mcp.manager import McpManager
+
+mgr = McpManager(root=os.getcwd())
+mgr.connect_all()                # 失败的记进 mgr.notes
+mgr.register_into(registry)      # 塞进工具表
+mgr.describe()                   # "1/1 个 MCP Server，3 个工具"
+mgr.close()                      # 关会话和事件循环
+```
+
+`Agent` 会自动做这些，构造函数加了参数：
+
+```python
+Agent(auto_load_mcp=True)        # 默认开，启动时自动连
+Agent(auto_load_mcp=False)       # 关掉，只测本地工具时用
+```
+
+### 退出清理
+
+TUI 的 `on_unmount()` 会调 `agent.close()` 关掉 MCP 会话，不留后台线程。
+
 ## 测试
 
 ```
@@ -376,6 +508,7 @@ python _test_web.py        # 46 项：searchWeb / fetchWeb 的全部异常路径
 python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编码
 python _test_skills.py     # 86 项：技能发现、注入、按需加载、创建、路径安全
 python _test_office.py     # 46 项：officeDoc / officeHelp，真实生成三种文档
+python _test_mcp.py        # 50 项：配置解析、名字映射、结果归一化、故障隔离、真实连接
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

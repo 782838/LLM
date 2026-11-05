@@ -57,6 +57,26 @@ def check():
     for note in notes:
         print("[!!] %s" % note)
 
+    # MCP 状态。连不上不影响其他工具，所以只提示不判定失败。
+    from core.mcp import config as mcp_config
+    from core.mcp.manager import McpManager
+
+    mcp_cfg = mcp_config.find_config()
+    if not mcp_cfg:
+        print("[--] 没有 .mcp.json：%s（不影响使用）" % mcp_config.config_path())
+    else:
+        print("[OK] MCP 配置：%s" % mcp_cfg)
+        mgr = McpManager(root=os.getcwd())
+        try:
+            mgr.connect_all()
+            for line in mgr.status_lines():
+                print("     - %s" % line)
+            print("[OK] MCP 工具：%d 个" % len(mgr.tools))
+            for note in mgr.notes:
+                print("[!!] %s" % note)
+        finally:
+            mgr.close()
+
     return 0 if ok else 1
 
 

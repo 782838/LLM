@@ -17,6 +17,7 @@ import json
 from . import skills as skill_store
 from .config import Config
 from .llm.client import Client, LLMError, ToolCallBuffer
+from .mcp.manager import McpManager
 from .tools import default_registry
 
 MAX_TOOL_ROUNDS = 12
@@ -54,7 +55,8 @@ class Agent:
     """一个有记忆、会用工具的对话代理。"""
 
     def __init__(self, config=None, registry=None, system_prompt=None,
-                 skills_root=None, auto_load_skills=True):
+                 skills_root=None, auto_load_skills=True,
+                 auto_load_mcp=True, mcp_manager=None):
         self.config = config or Config("http://127.0.0.1:11437/v1", "")
         self.client = Client(self.config)
         self.history = []
@@ -70,11 +72,25 @@ class Agent:
             self.skills, base_prompt=system_prompt
         )
 
-        # 工具表要把技能列表闭包进去，loadSkill 才知道有哪些技能
+        # 连 MCP Server。单个失败只记 notes，不影响本地工具。
+        self.mcp = mcp_manager
+        self.mcp_notes = []
+        if self.mcp is None and auto_load_mcp:
+            self.mcp = McpManager(root=skills_root)
+            self.mcp.connect_all()
+        if self.mcp is not None:
+            self.mcp_notes = list(self.mcp.notes)
+
+        # 工具表要把技能列表闭包进去，loadSkill 才知道有哪些技能；
+        # MCP 工具也在这里一起注册进来。
         self.tools = (
             registry
             if registry is not None
-            else default_registry(skills=self.skills, skills_root=skills_root)
+            else default_registry(
+                skills=self.skills,
+                skills_root=skills_root,
+                mcp_manager=self.mcp,
+            )
         )
 
 
@@ -111,6 +127,18 @@ class Agent:
     def skill_summary(self):
         """给界面显示的一句话技能摘要。"""
         return skill_store.describe(self.skills)
+
+    def mcp_summary(self):
+        """给界面显示的一句话 MCP 摘要。"""
+        if self.mcp is None:
+            return "无 MCP"
+        return self.mcp.describe()
+
+    def close(self):
+        """关掉 MCP 会话和后台事件循环。界面退出时调。"""
+        if self.mcp is not None:
+            return self.mcp.close()
+        return []
 
     # ---- 主流程 ----
     def ask(self, text):

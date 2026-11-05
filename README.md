@@ -7,7 +7,7 @@
 - **AnythingLLMServer** —— 单文件网页上传文档，让 AnythingLLM 完成向量化。
 - **Agent/Practice01** —— `chat.py`，和大模型循环对话：流式打字机输出，每轮把全部聊天记录发给模型。
 - **Agent/Practice02** —— `chat.py`，在 Practice01 基础上加 function call：模型自己决定调工具，共 12 个函数。
-- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行、技能加载/创建、Office 文档能力，共 19 个工具。
+- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行、技能加载/创建、Office 文档、MCP Client，共 19 个本地工具 + 任意 MCP Server 的工具。
 
 Practice01 / Practice02 用法：复制 `config.example.ini` 为 `config.ini`，填自己的接口地址、模型名、密钥，然后 `python chat.py`。
 
@@ -77,6 +77,32 @@ D:\LLM\
 2. **模型需要时**调 `loadSkill` 把正文拉进对话
 
 这样技能正文写多长都不影响启动，只在真正用到时才消耗 token。
+
+## xAgent 的 MCP Client
+
+xAgent 能连外部 MCP Server，把对方的工具当成自己的工具用。
+
+项目根（启动时的工作目录）放一个 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "Bazi-MCP": {
+      "type": "streamable_http",
+      "url": "https://mcp.api-inference.modelscope.net/4a3222faa31a4e/mcp"
+    },
+    "PetHospitalMCP": {
+      "type": "streamable_http",
+      "url": "http://127.0.0.1:8090/mcp"
+    }
+  }
+}
+```
+
+- 支持 `streamable_http` 和 `stdio` 两种协议
+- MCP 工具自动加服务器前缀（`Bazi-MCP__getBaziDetail`），不会和本地 19 个工具撞名
+- 一个 Server 连不上只记一笔，不影响其他工具
+- 用后台事件循环把 async 的 MCP SDK 桥接成同步调用，会话常驻不重连
 
 ## xAgent 的分层
 
