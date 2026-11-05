@@ -214,6 +214,35 @@ async def ui_test():
         await pilot.pause()
         check("选中回传", picked.get("value") == "Qwen/Qwen3.8-Flash-Next")
 
+    # ---- 点击侧边栏模型区 ----
+    from tui.widgets import ModelBox
+
+    app2 = XAgentApp(agent=FakeAgent())
+    async with app2.run_test(size=(110, 34)) as pilot:
+        await pilot.pause()
+        box = app2.query_one(ModelBox)
+        check("模型区存在", box is not None)
+        # FakeAgent 没配模型，这里只验证「显示为空时给了占位提示」
+        expected = app2._agent.config.model or "（未配置）"
+        check("模型区显示与配置一致", box._model == expected,
+              "%r vs %r" % (box._model, expected))
+
+        # 发点击消息
+        box.post_message(ModelBox.Clicked())
+        shown = False
+        for _ in range(30):
+            await pilot.pause()
+            await asyncio.sleep(0.2)
+            if isinstance(app2.screen, ModelPicker):
+                shown = True
+                break
+        check("点模型区弹出选择器", shown, type(app2.screen).__name__)
+
+        if shown:
+            await pilot.press("escape")
+            await pilot.pause()
+            check("Esc 能关掉", not isinstance(app2.screen, ModelPicker))
+
     return
 
 

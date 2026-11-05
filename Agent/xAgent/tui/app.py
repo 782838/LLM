@@ -303,6 +303,10 @@ class XAgentApp(App):
         conv.add_system("\n".join(lines))
 
     # ---- 切换模型 ----
+    def on_model_box_clicked(self, _event):
+        """点侧边栏的模型区，弹出选择器。"""
+        self.action_pick_model()
+
     def action_pick_model(self):
         """Ctrl+M：弹出模型选择器。"""
         conv = self.query_one(Conversation)
