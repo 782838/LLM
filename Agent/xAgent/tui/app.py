@@ -28,6 +28,7 @@ from . import commands as cmd_mod
 from . import events
 from .command_palette import CommandPalette
 from .compact_view import CompactView
+from .exit_dialog import ExitSaveDialog
 from .model_picker import ModelPicker
 from .session_picker import SessionPicker
 from .widgets import Conversation, PromptInput, Sidebar
@@ -221,6 +222,8 @@ class XAgentApp(App):
         self._where = ""
         self._mcp_ready = False
         self._bootstrap = None
+        # 退出流程防重入：弹窗期间再按 Ctrl+C 不重复弹
+        self._exiting = False
 
     # ---- 组装 ----
     def compose(self):
@@ -258,6 +261,57 @@ class XAgentApp(App):
                 agent.close()
             except Exception:
                 pass
+
+    # ---- 退出 ----
+    def request_exit(self):
+        """所有退出路径的唯一入口：先决定要不要保存，再真的退。
+
+        Ctrl+C 空闲时、/quit、点窗口关闭都走这里，避免有的路存有的路不存。
+        """
+        if self._exiting:
+            return
+        agent = self._agent
+
+        # 没东西可存就直接退
+        if agent is None or not agent.has_unsaved():
+            self.exit()
+            return
+
+        # 配置成不询问：按 auto_save_on_exit 静默处理
+        if not settings.ask_save_on_exit:
+            if settings.auto_save_on_exit:
+                agent.save_session()
+            self.exit()
+            return
+
+        self._exiting = True
+        self.push_screen(
+            ExitSaveDialog(
+                turns=agent.turn_count(),
+                preview=session_mod.preview_of(agent.history),
+                session_id=agent.session_id,
+            ),
+            self._after_exit_choice,
+        )
+
+    def _after_exit_choice(self, choice):
+        """用户选完：save / discard / None（取消）。"""
+        self._exiting = False
+        if choice is None:
+            self.query_one("#prompt", PromptInput).focus()
+            return
+
+        if choice == "save":
+            sid, detail = self._agent.save_session()
+            if sid:
+                # 存成功才退；存失败留在界面，别把会话弄丢
+                self.exit()
+                return
+            self.query_one(Conversation).add_error("保存失败，没有退出：%s" % detail)
+            self.query_one("#prompt", PromptInput).focus()
+            return
+
+        self.exit()
 
     # ---- 初始化 ----
     def _setup_agent(self):
@@ -377,8 +431,10 @@ class XAgentApp(App):
             conv.add_system("MCP：没有配置服务器")
 
         # 工具数变了，刷新状态栏和侧边栏
+        # 注意：这里必须带上 turns，否则 MCP 后台连完会把已经聊过的轮数刷回 0
         sidebar.setup(agent.config.model, agent.tool_names(),
-                      agent.skills, agent.skill_notes)
+                      agent.skills, agent.skill_notes,
+                      turns=agent.turn_count())
         self._set_status()
 
     def _set_status(self, override=None):
@@ -457,11 +513,11 @@ class XAgentApp(App):
         self.query_one(Conversation).add_system("正在中断…")
 
     def action_interrupt_or_quit(self):
-        """Ctrl+C：正在生成就中断，空闲时才退出。"""
+        """Ctrl+C：正在生成就中断，空闲时才退出（退出前问要不要存）。"""
         if self._busy:
             self.action_stop()
             return
-        self.exit()
+        self.request_exit()
 
     def on_button_pressed(self, event):
         """停止按钮。"""
@@ -538,7 +594,8 @@ class XAgentApp(App):
 
         sidebar = self.query_one(Sidebar)
         sidebar.setup(agent.config.model, agent.tool_names(),
-                      agent.skills, agent.skill_notes)
+                      agent.skills, agent.skill_notes,
+                      turns=agent.turn_count())
         self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()
 
@@ -547,7 +604,10 @@ class XAgentApp(App):
         conv = self.query_one(Conversation)
         sid, detail = self._agent.save_session()
         if sid:
-            conv.add_system("已保存会话 %s" % sid)
+            conv.add_system(
+                "已保存会话 %s（%d 轮）" % (sid, self._agent.turn_count())
+            )
+            self._update_context_status()
         else:
             conv.add_error("保存失败：%s" % detail)
 
@@ -584,7 +644,8 @@ class XAgentApp(App):
 
         sidebar = self.query_one(Sidebar)
         sidebar.setup(self._agent.config.model, self._agent.tool_names(),
-                      self._agent.skills, self._agent.skill_notes)
+                      self._agent.skills, self._agent.skill_notes,
+                      turns=self._agent.turn_count())
         self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()
 
@@ -647,13 +708,54 @@ class XAgentApp(App):
         conv.add_system("\n".join(lines))
 
     def do_clear(self):
-        self.query_one(Conversation).remove_children()
+        """清屏 + 清历史。
+
+        只清屏不清 history 会骗人：看着干净了，token 照烧、模型照样记得
+        之前聊的。所以这里一并 reset，并在提示里说清楚。
+        没聊过的会话不弹确认，聊过才问一句，避免误删。
+        """
+        conv = self.query_one(Conversation)
+
+        if self._busy:
+            conv.add_error("上一轮还没结束，稍等再清空。")
+            return
+
+        if not self._agent.history:
+            conv.remove_children()
+            return
+
+        from .confirm import ConfirmDialog
+
+        def apply(ok):
+            if not ok:
+                return
+            self._agent.reset()
+            self._agent.start_session()
+            conv.remove_children()
+            conv.add_system("已清空对话历史和屏幕。当前会话从头开始。")
+            self._sync_turns()
+            self._update_context_status()
+            self.query_one("#prompt", PromptInput).focus()
+
+        self.push_screen(
+            ConfirmDialog(
+                "清空对话",
+                "这会清掉屏幕和全部对话历史（%d 轮）。\n"
+                "没保存的内容会丢失。要清空吗？" % self._agent.turn_count(),
+                ok_text="清空",
+            ),
+            apply,
+        )
 
     def do_help(self):
         self.query_one(Conversation).add_system(cmd_mod.help_text())
 
     def do_quit(self):
-        self.exit()
+        self.request_exit()
+
+    def action_quit(self):
+        """Textual 自带的退出动作也拦下来，走统一的保存询问。"""
+        self.request_exit()
 
     # ---- 压缩 ----
     def action_compact(self):
@@ -749,9 +851,20 @@ class XAgentApp(App):
     def _finish_turn(self):
         self._busy = False
         self._show_stop_button(False)
-        self.query_one(Sidebar).bump_turn()
+        self._sync_turns()
         self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()
+
+    def _sync_turns(self):
+        """侧边栏轮数按 agent.history 实算，不靠进程内计数器。
+
+        计数器只在「这一轮没调工具」时才加，调了工具、被中断、报错的轮次
+        都会漏掉，所以必须从历史里数。
+        """
+        try:
+            self.query_one(Sidebar).set_turns(self._agent.turn_count())
+        except Exception:
+            pass
 
     # ---- Agent 事件 ----
     def on_assistant_start(self, _event):
@@ -831,7 +944,7 @@ class XAgentApp(App):
         )
         sb = self.query_one(Sidebar)
         sb.setup(model_id, self._agent.tool_names(), self._agent.skills,
-                 self._agent.skill_notes)
+                 self._agent.skill_notes, turns=0)
         self._set_status()
 
 

@@ -653,7 +653,7 @@ deepseek-ai/DeepSeek-V4.1-Flash-1017  │  20 工具  │  3 技能  │  上下
 | `/skills` | `/sk` | 列出已加载技能 |
 | `/mcp` | — | 查看 MCP 连接状态 |
 | `/context` | `/ctx` | 上下文用量详情 |
-| `/clear` | `/cls` | 清屏（不删历史） |
+| `/clear` | `/cls` | 清屏并清空历史（会先确认） |
 | `/help` | `/?` | 显示帮助 |
 | `/quit` | `/q` | 退出 |
 
@@ -680,6 +680,34 @@ deepseek-ai/DeepSeek-V4.1-Flash-1017  │  20 工具  │  3 技能  │  上下
 
 `agents_md` 存的是注入那一刻的内容。恢复会话时不再重新读文件 ——
 文件可能已经改了，重读会让历史和文件对不上。
+
+### 退出时保存
+
+`Ctrl+C`（空闲时）、`/quit`、点窗口关闭，三条路都走同一个 `request_exit()`，
+不会出现「有的路存有的路丢」：
+
+- 没聊过（只有 AGENTS.md 注入）→ 不问，直接退
+- 聊过且有新内容 → 弹 `ExitSaveDialog`：`S` 保存并退出 / `D` 不保存 / `Esc` 取消
+- 选保存但写盘失败 → **不退**，留在界面报错，别把会话弄丢
+
+两条配置控制这个行为：
+
+```ini
+[agent]
+# 退出时弹窗询问（推荐 true）
+ask_save_on_exit = true
+# 不弹窗时退出要不要直接保存
+auto_save_on_exit = false
+```
+
+### 侧边栏的轮数
+
+「N 轮对话」是**从 `agent.history` 实算**的（`Agent.turn_count()`），不是进程内计数器。
+
+之前用计数器有两个漏算：调了工具的轮次不加（`on_assistant_end` 里
+`if not event.calls` 才加），被中断和报错的轮次也不加；更糟的是 MCP 在后台
+连完之后会调一次 `sidebar.setup()`，把已聊的轮数刷回 0。现在统一按历史数，
+且所有 `setup()` 调用都带上 `turns`。
 
 ## AGENTS.md：一次注入，全程复用
 

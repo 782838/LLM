@@ -43,7 +43,7 @@ COMMANDS = [
     Command("skills", ["sk"], "列出已加载的技能", "do_skills", needs_idle=False),
     Command("mcp", [], "查看 MCP 服务器连接状态", "do_mcp", needs_idle=False),
     Command("context", ["ctx"], "查看上下文用量详情", "do_context", needs_idle=False),
-    Command("clear", ["cls"], "清屏（不删历史）", "do_clear", needs_idle=False),
+    Command("clear", ["cls"], "清屏并清空历史（会先确认）", "do_clear", needs_idle=False),
     Command("help", ["?", "h"], "显示这条帮助", "do_help", needs_idle=False),
     Command("quit", ["exit", "q"], "退出程序", "do_quit", needs_idle=False),
 ]

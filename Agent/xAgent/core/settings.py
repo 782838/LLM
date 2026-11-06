@@ -39,6 +39,8 @@ DEFAULTS = {
         "max_tool_rounds": 12,
         "session_dir": ".agents/sessions",
         "auto_save_on_new": True,    # /new 时自动保存当前会话
+        "ask_save_on_exit": True,    # 退出时询问是否保存（false 则按 auto_save_on_exit 静默处理）
+        "auto_save_on_exit": False,  # 不询问时，退出要不要直接保存
     },
     "context": {
         "warn_ratio": 0.6,
@@ -88,6 +90,8 @@ DEFAULTS = {
 # 需要转成 bool 的键（ini 里只有字符串）
 _BOOL_KEYS = {
     ("agent", "auto_save_on_new"),
+    ("agent", "ask_save_on_exit"),
+    ("agent", "auto_save_on_exit"),
     ("mcp", "enabled"),
 }
 
@@ -231,6 +235,14 @@ class Settings:
     @property
     def auto_save_on_new(self):
         return self.get("agent", "auto_save_on_new")
+
+    @property
+    def ask_save_on_exit(self):
+        return self.get("agent", "ask_save_on_exit")
+
+    @property
+    def auto_save_on_exit(self):
+        return self.get("agent", "auto_save_on_exit")
 
     @property
     def warn_ratio(self):
@@ -386,6 +398,10 @@ def template_text():
         "session_dir = .agents/sessions",
         "# /new 新建会话时是否自动保存当前会话",
         "auto_save_on_new = true",
+        "# 退出时是否弹窗询问「保存这个会话」（推荐 true，避免白聊一场）",
+        "ask_save_on_exit = true",
+        "# 不弹窗时（ask_save_on_exit = false）退出要不要直接保存",
+        "auto_save_on_exit = false",
         "",
         "# ============ 上下文压缩 ============",
         "[context]",

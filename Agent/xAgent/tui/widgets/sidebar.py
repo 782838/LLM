@@ -167,12 +167,17 @@ class Sidebar(VerticalScroll):
         yield InfoPanel(id="info-panel")
         yield McpPanel(id="mcp-panel")
 
-    def setup(self, model, tools, skills, skill_notes=None):
+    def setup(self, model, tools, skills, skill_notes=None, turns=0):
         self._model = model or "（未配置）"
         self._tools = list(tools)
         self._skills = list(skills)
         self._skill_notes = list(skill_notes or [])
-        self._turns = 0
+        self._turns = turns
+        self._push()
+
+    def set_turns(self, turns):
+        """把轮数改成真实值（从 agent.history 算出来的）。"""
+        self._turns = turns
         self._push()
 
     def bump_turn(self):

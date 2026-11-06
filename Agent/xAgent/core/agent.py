@@ -128,6 +128,7 @@ class Agent:
         self.session_created = None   # 会话创建时间，保存时保留
         self.agents_md_path = None    # 注入过的 AGENTS.md 路径
         self.agents_md_content = None # 注入时的内容，保存会话要用
+        self.saved_len = 0            # 上次保存时 history 的长度，用来判断有没有新内容
 
         # 中断控制：界面在别的线程里 set 这个事件，流式循环会检查
         self._stop_event = threading.Event()
@@ -146,6 +147,7 @@ class Agent:
         self.session_id = None
         self.session_created = None
         self.agents_md_content = None
+        self.saved_len = 0
         self.last_prompt_tokens = None
         self.last_hist_tokens = 0
 
@@ -169,6 +171,12 @@ class Agent:
         if not self.history:
             return None, "当前会话是空的，没有保存"
 
+        # 只有 AGENTS.md 注入、没有真实对话，不值得存
+        if not any(m.get("role") == "user"
+                   and not str(m.get("content") or "").startswith("[项目说明")
+                   for m in self.history):
+            return None, "当前会话还没有聊过，没有保存"
+
         sid, path, err = session_mod.save(
             root=self.root,
             messages=self.history,
@@ -181,9 +189,24 @@ class Agent:
             return None, err
 
         self.session_id = sid
+        self.saved_len = len(self.history)
         if self.session_created is None:
             self.session_created = time.strftime("%Y-%m-%d %H:%M:%S")
         return sid, path
+
+    def has_unsaved(self):
+        """有没有还没落盘的新内容。退出时据此决定要不要问。"""
+        if not self.history:
+            return False
+        if not any(m.get("role") == "user"
+                   and not str(m.get("content") or "").startswith("[项目说明")
+                   for m in self.history):
+            return False
+        return len(self.history) > self.saved_len
+
+    def turn_count(self):
+        """当前会话聊了几轮（真实历史算，不靠界面计数器）。"""
+        return session_mod.count_turns(self.history)
 
     def resume_session(self, session_id):
         """恢复一个已保存的会话。返回 (成功与否, 说明)。"""
@@ -195,6 +218,7 @@ class Agent:
         self.session_id = data.get("id") or session_id
         self.session_created = data.get("created")
         self.agents_md_content = data.get("agents_md")
+        self.saved_len = len(self.history)
 
         # 换了上下文，之前的 token 记录作废
         self.last_prompt_tokens = None
