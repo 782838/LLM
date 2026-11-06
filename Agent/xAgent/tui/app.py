@@ -177,6 +177,17 @@ Footer {
     border: round #3b82f6;
 }
 
+#prompt-row {
+    height: 4;
+}
+
+#stop-btn {
+    width: 10;
+    height: 3;
+    margin: 0 1 0 0;
+    display: none;
+}
+
 #prompt-hint {
     height: 1;
     color: #64748b;
@@ -193,7 +204,7 @@ class XAgentApp(App):
     CSS = CSS
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "退出", show=True),
+        Binding("ctrl+c", "interrupt_or_quit", "中断/退出", show=True),
         Binding("ctrl+n", "do_new", "新会话", show=True),
         Binding("ctrl+m", "pick_model", "模型", show=True),
         Binding("ctrl+l", "do_clear", "清屏", show=True),
@@ -220,7 +231,9 @@ class XAgentApp(App):
                 yield Conversation(id="conversation")
                 yield CommandPalette(id="palette")
         yield Static("", id="status")
-        yield PromptInput(id="prompt")
+        with Horizontal(id="prompt-row"):
+            yield PromptInput(id="prompt")
+            yield Button("停止", id="stop-btn", variant="error")
         yield Static(
             " Enter 发送   / 命令   Ctrl+J 换行   Ctrl+M 模型   Ctrl+N 新会话   F1 工具   F2 技能",
             id="prompt-hint",
@@ -410,9 +423,19 @@ class XAgentApp(App):
             self._run_command(text)
             return
 
+        # 正在生成时再发消息 = 插话：先中断当前回答，再处理这条新消息
         if self._busy:
-            conv.add_error("上一轮还没结束，稍等。")
+            conv.add_system("已中断上一个回答，正在处理你刚发的消息…")
+            self.action_stop()
+            # 给被中断的 worker 一点时间收尾，再发新消息
+            self.set_timer(0.3, lambda: self._ask(text))
             return
+
+        self._ask(text)
+
+    def _ask(self, text):
+        """真正发起一轮提问。"""
+        conv = self.query_one(Conversation)
 
         ok, reason = self._agent.can_accept_input()
         if not ok:
@@ -422,8 +445,36 @@ class XAgentApp(App):
 
         conv.add_user(text)
         self._busy = True
-        self._set_status("思考中…")
+        self._show_stop_button(True)
+        self._set_status("思考中…（Ctrl+C 或点「停止」可中断）")
         self.run_worker(lambda: self._agent.ask(text), thread=True, exclusive=True)
+
+    def action_stop(self):
+        """中断当前生成。按钮和快捷键都走这里。"""
+        if not self._busy:
+            return
+        self._agent.request_stop()
+        self.query_one(Conversation).add_system("正在中断…")
+
+    def action_interrupt_or_quit(self):
+        """Ctrl+C：正在生成就中断，空闲时才退出。"""
+        if self._busy:
+            self.action_stop()
+            return
+        self.exit()
+
+    def on_button_pressed(self, event):
+        """停止按钮。"""
+        if event.button.id == "stop-btn":
+            self.action_stop()
+            event.stop()
+
+    def _show_stop_button(self, show):
+        try:
+            btn = self.query_one("#stop-btn", Button)
+            btn.display = show
+        except Exception:
+            pass
 
     def on_prompt_input_changed(self, event):
         """输入变化时更新补全面板。"""
@@ -668,6 +719,7 @@ class XAgentApp(App):
         if event.worker.name == "compact":
             if event.state != WorkerState.SUCCESS:
                 self._busy = False
+                self._show_stop_button(False)
                 self._set_status()
                 self.query_one(Conversation).add_error(
                     "压缩过程出错：%s" % event.worker.error
@@ -676,6 +728,7 @@ class XAgentApp(App):
 
             ok, payload = event.worker.result
             self._busy = False
+            self._show_stop_button(False)
             self._update_context_status()
 
             if not ok:
@@ -695,6 +748,7 @@ class XAgentApp(App):
 
     def _finish_turn(self):
         self._busy = False
+        self._show_stop_button(False)
         self.query_one(Sidebar).bump_turn()
         self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()

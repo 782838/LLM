@@ -14,6 +14,7 @@
 """
 import json
 import os
+import threading
 import time
 
 from . import agents_md
@@ -127,6 +128,10 @@ class Agent:
         self.session_created = None   # 会话创建时间，保存时保留
         self.agents_md_path = None    # 注入过的 AGENTS.md 路径
         self.agents_md_content = None # 注入时的内容，保存会话要用
+
+        # 中断控制：界面在别的线程里 set 这个事件，流式循环会检查
+        self._stop_event = threading.Event()
+        self.interrupted = False      # 上一次 ask 是否被中断
 
     # ---- 回调辅助 ----
     def _emit(self, name, *args):
@@ -365,15 +370,31 @@ class Agent:
                 )
         return "\n\n".join(lines)
 
+    # ---- 中断控制 ----
+    def request_stop(self):
+        """请求中断当前生成。界面线程调，会在下一行流式数据前生效。"""
+        self._stop_event.set()
+
+    def clear_stop(self):
+        self._stop_event.clear()
+
+    def _stopped(self):
+        return self._stop_event.is_set()
+
     # ---- 主流程 ----
     def ask(self, text):
         """提一个问题，跑完整个「回答-调工具-再回答」循环。
 
         返回最终的助手文本。出错时返回空串并把错误交给 on_error。
+        被 request_stop() 中断时，返回已经生成的部分。
         """
         text = (text or "").strip()
         if not text:
             return ""
+
+        # 每次提问开始先清掉上次的中断标记
+        self.clear_stop()
+        self.interrupted = False
 
         self.history.append({"role": "user", "content": text})
         mark = len(self.history) - 1  # 出错时回滚到这里
@@ -397,7 +418,9 @@ class Agent:
             self._emit("on_assistant_start")
 
             last_usage = None
-            for delta in self.client.stream(self.messages(), schemas):
+            for delta in self.client.stream(
+                self.messages(), schemas, should_stop=self._stopped
+            ):
                 if delta.usage:
                     last_usage = delta.usage
                 if delta.content:
@@ -410,6 +433,20 @@ class Agent:
             if last_usage:
                 self.last_prompt_tokens = last_usage.get("prompt_tokens")
                 self.last_hist_tokens = context_mod.history_tokens(self.history)
+
+            # 被中断了：把已生成的内容保留进历史，不再继续调工具
+            if self._stopped():
+                self.interrupted = True
+                if answer.strip():
+                    self.history.append({
+                        "role": "assistant",
+                        "content": answer + "\n\n（这条回答被用户中断）",
+                    })
+                else:
+                    # 一个字都没生成，把用户那条也撤掉，避免留下空提问
+                    del self.history[mark:]
+                self._emit("on_assistant_end", answer, [])
+                return answer
 
             calls = [ToolCall(c["id"], c["name"], c["arguments"]) for c in buffer.ready()]
             self._emit("on_assistant_end", answer, calls)
@@ -427,6 +464,15 @@ class Agent:
             )
 
             for call in calls:
+                # 工具执行前再查一次 —— 用户可能在工具列表刚下发时就打断了
+                if self._stopped():
+                    self.interrupted = True
+                    self._emit(
+                        "on_error",
+                        "已中断：还有 %d 个工具没执行。" % len(calls),
+                    )
+                    return answer
+
                 args = call.parsed()
                 self._emit("on_tool_start", call.name, args)
                 result, error = self.tools.execute(call.name, args)

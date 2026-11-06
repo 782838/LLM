@@ -70,6 +70,7 @@ python main.py --check
 | `F1` | 显示工具清单 |
 | `F2` | 显示技能清单 |
 | `Ctrl+M` | 切换模型 |
+| `Ctrl+C` | 生成中 = 中断回答；空闲时 = 退出 |
 | `/` | 输入框里敲，弹出命令补全面板 |
 | `Ctrl+C` | 退出 |
 
@@ -750,6 +751,45 @@ config.ini 里的值  >  core/settings.py 里的 DEFAULTS  >  调用方传入
             MCP 已关闭（config.ini 里 [mcp] enabled = false）
 ```
 
+## 中断与插话
+
+### 中断当前回答
+
+模型说到一半想停，三个办法：
+
+| 方式 | 说明 |
+|---|---|
+| 点输入框右边的「停止」按钮 | 生成时才出现 |
+| 按 `Ctrl+C` | 生成中 = 中断，空闲时 = 退出 |
+| 直接发下一条消息 | 见下面「插话」 |
+
+中断后**已经生成的内容会保留**，并在历史里标注「（这条回答被用户中断）」。
+一个字都没生成的情况，那条空提问也会被撤掉。
+
+实现上用的是 `threading.Event`：
+
+```python
+agent.request_stop()          # 界面线程调
+# Client.stream 每读一行前检查 should_stop()
+```
+
+不用 `Thread.cancel()` 是因为 worker 无法安全中断阻塞中的 socket 读，
+用一个标志位在流式循环里检查更可靠。
+
+### 插话
+
+**正在生成时直接再发一条消息**，就等于插话：
+
+```
+你：帮我写个函数
+助手：好的，我来写…
+你：（这时再发）先别写了，换个思路        ← 插话
+   → 自动中断上一条，立刻处理这条新的
+```
+
+界面上会先提示「已中断上一个回答，正在处理你刚发的消息…」，
+然后按正常流程走新一轮。
+
 ## 测试
 
 ```
@@ -766,6 +806,8 @@ python _test_context.py    # 85 项：token 估算、归档、压缩 Prompt、�
 python _test_compact_ui.py # 12 项：/compact 拦截、输入限制、对比浮层
 python _test_final.py      # 78 项：配置化、首次生成、会话、AGENTS.md
 python _test_final_ui.py   # 32 项：命令执行、补全面板、MCP 侧边栏、首次运行弹窗
+python _test_interrupt.py  # 18 项：流式中断、Agent 中断语义、停止按钮、Ctrl+C
+python _test_interject.py  # 6 项：忙碌时插话打断并处理新消息
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

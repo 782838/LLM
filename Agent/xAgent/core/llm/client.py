@@ -65,10 +65,13 @@ class Client:
     def __init__(self, config):
         self.config = config
 
-    def stream(self, messages, tools=None):
+    def stream(self, messages, tools=None, should_stop=None):
         """发起一次流式请求。
 
         逐帧 yield Delta，调用方边收边显示。出错抛 LLMError。
+
+        should_stop 是可选的零参函数，每读一行前调一次。
+        返回真就立刻停止读取并关掉连接 —— 用来支持「中断生成」。
         """
         body = {
             "model": self.config.model,
@@ -100,6 +103,10 @@ class Client:
 
         try:
             for raw in resp:
+                # 每读一行先看看要不要停 —— 中断生成靠这里生效
+                if should_stop is not None and should_stop():
+                    break
+
                 line = raw.decode("utf-8", errors="replace").strip()
                 if not line or not line.startswith("data:"):
                     continue
