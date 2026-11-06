@@ -19,14 +19,28 @@ DEFAULT_TIMEOUT = 60
 MAX_TIMEOUT = 300
 MAX_OUTPUT_CHARS = 4000
 
-# 常见安装位置的候选路径
-EXE_CANDIDATES = (
-    r"D:\LLM\tools\officecli\officecli-win-x64.exe",
-    r"D:\LLM\tools\officecli\officecli.exe",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), "..", "..", "tools", "officecli",
-        "officecli-win-x64.exe"),
-)
+def _exe_candidates():
+    """算出 officecli 的候选路径。
+
+    不写死任何绝对路径。做法是从这个文件往上走，
+    每一层都试 <该层>/tools/officecli/，找到为止。
+
+    这样无论仓库怎么摆（xAgent/tools、项目根/tools、
+    或者放到上一层/tools），都能命中。
+    """
+    paths = []
+    current = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):                      # 最多往上 6 层
+        for name in ("officecli-win-x64.exe", "officecli.exe"):
+            paths.append(os.path.join(current, "tools", "officecli", name))
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return tuple(paths)
+
+
+EXE_CANDIDATES = _exe_candidates()
 
 
 def find_officecli():

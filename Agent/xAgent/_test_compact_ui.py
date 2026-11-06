@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, r"D:\LLM\Agent\xAgent")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import context as C
 from core.agent import Agent

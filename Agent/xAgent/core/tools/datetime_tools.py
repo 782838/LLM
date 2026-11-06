@@ -10,14 +10,46 @@ from .registry import Tool
 
 DEFAULT_FORMAT = "+%Y-%m-%d %H:%M:%S %A"
 
-DATE_EXE_FALLBACKS = (
-    r"D:\Git\usr\bin\date.exe",
-    r"C:\Program Files\Git\usr\bin\date.exe",
-    r"C:\Program Files (x86)\Git\usr\bin\date.exe",
-    os.path.join(
-        os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin", "date.exe"
-    ),
-)
+def _date_candidates():
+    """算出 date.exe 的候选路径。
+
+    不写死任何盘符。Windows 自带的 date 是改日期的命令，
+    真正的取时间命令是 Git 附带的 date.exe，所以要自己找。
+    """
+    paths = []
+
+    # 1. Git 的标准安装位置
+    for base in (
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    ):
+        paths.append(os.path.join(base, "Git", "usr", "bin", "date.exe"))
+
+    # 2. 用户级安装
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        paths.append(os.path.join(local, "Programs", "Git", "usr", "bin", "date.exe"))
+
+    # 3. 从 PATH 里已有的 git 反推
+    for name in ("git", "git.exe"):
+        found = None
+        for folder in os.environ.get("PATH", "").split(os.pathsep):
+            if not folder:
+                continue
+            candidate = os.path.join(folder, name)
+            if os.path.isfile(candidate):
+                found = candidate
+                break
+        if found:
+            # git 在 <Git>/cmd/git.exe，date 在 <Git>/usr/bin/date.exe
+            git_root = os.path.dirname(os.path.dirname(found))
+            paths.append(os.path.join(git_root, "usr", "bin", "date.exe"))
+            break
+
+    return tuple(paths)
+
+
+DATE_EXE_FALLBACKS = _date_candidates()
 
 
 def find_date():

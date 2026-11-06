@@ -35,12 +35,34 @@ TOOLS = [
 ]
 
 DEFAULT_FORMAT = "+%Y-%m-%d %H:%M:%S %A"
-DATE_EXE_FALLBACKS = (
-    r"D:\Git\usr\bin\date.exe",
-    r"C:\Program Files\Git\usr\bin\date.exe",
-    r"C:\Program Files (x86)\Git\usr\bin\date.exe",
-    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "usr", "bin", "date.exe"),
-)
+def _date_candidates():
+    """算出 date.exe 的候选路径，不写死盘符。
+
+    Windows 自带的 date 是改日期的命令，真正的取时间命令在 Git 的
+    usr/bin 下，或者在 PATH 里，所以要自己找。
+    """
+    paths = []
+    for base in (
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    ):
+        paths.append(os.path.join(base, "Git", "usr", "bin", "date.exe"))
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        paths.append(os.path.join(local, "Programs", "Git", "usr", "bin", "date.exe"))
+    # 从 PATH 里的 git 反推
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if not folder:
+            continue
+        git_exe = os.path.join(folder, "git.exe")
+        if os.path.isfile(git_exe):
+            git_root = os.path.dirname(os.path.dirname(git_exe))
+            paths.append(os.path.join(git_root, "usr", "bin", "date.exe"))
+            break
+    return tuple(paths)
+
+
+DATE_EXE_FALLBACKS = _date_candidates()
 
 
 def find_date():

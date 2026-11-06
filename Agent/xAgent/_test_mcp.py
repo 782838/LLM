@@ -277,10 +277,22 @@ print("=" * 72)
 print("七、真实连接（有配置才跑）")
 print("=" * 72)
 
-LIVE_ROOT = r"D:\LLM\office"
-live_cfg = mcp_config.find_config(LIVE_ROOT)
+LIVE_ROOT = os.environ.get("XAGENT_LIVE_ROOT", "")
+if not LIVE_ROOT:
+    # 没指定就往上找带 .mcp.json 的目录，不写死绝对路径
+    probe = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        if os.path.isfile(os.path.join(probe, ".mcp.json")):
+            LIVE_ROOT = probe
+            break
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+
+live_cfg = mcp_config.find_config(LIVE_ROOT) if LIVE_ROOT else None
 if not live_cfg:
-    print("跳过：%s 下没有 .mcp.json" % LIVE_ROOT)
+    print("跳过：没找到带 .mcp.json 的目录（可用 XAGENT_LIVE_ROOT 指定）")
 else:
     live = McpManager(root=LIVE_ROOT)
     live.connect_all()

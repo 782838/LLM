@@ -176,7 +176,7 @@ RunCli(command="python", args=["-c", "print('hi')"])
 
 ## Office 文档：officeDoc / officeHelp
 
-底层用 [officecli](D:\LLM\tools\officecli) —— 一个单文件 CLI，不用装 Office 就能读写
+底层用 [officecli](<项目根>/tools/officecli) —— 一个单文件 CLI，不用装 Office 就能读写
 `.docx` / `.xlsx` / `.pptx`。
 
 ### 为什么只包两个工具
@@ -210,7 +210,7 @@ officeDoc(args=["view", "deck.pptx", "outline"])
 
 | 项 | 做法 |
 |---|---|
-| 可执行文件 | 先查 PATH，再找 `D:\LLM\tools\officecli\officecli-win-x64.exe` |
+| 可执行文件 | 先查 PATH，再找 `<项目根>/tools/officecli/officecli-win-x64.exe` |
 | 常驻进程 | 设 `OFFICECLI_NO_AUTO_RESIDENT=1`，避免留下后台进程占着文件 |
 | 立即落盘 | 设 `OFFICECLI_RESIDENT_FLUSH=each`，防止别的程序读到旧内容 |
 | 超时 | 默认 60 秒，上限 300 秒 |
@@ -256,7 +256,7 @@ officeDoc(args=["view", "deck.pptx", "outline"])
 ```
 
 **项目根是程序启动时的用户工作目录**（`os.getcwd()`），不是 python.exe 的安装目录，
-也不是代码存放目录。所以在 `D:\LLM\office` 下启动，就读 `D:\LLM\office\.agents\skills\`。
+也不是代码存放目录。所以在 `<项目根>/office` 下启动，就读 `<项目根>/office\.agents\skills\`。
 
 每个技能目录至少包含一个 `SKILL.md`，开头用 YAML Frontmatter 声明 `name` 和 `description`：
 
@@ -545,8 +545,8 @@ TUI 的 `on_unmount()` 会调 `agent.close()` 关掉 MCP 会话，不留后台�
 作业规定项目根是「程序启动时的工作目录」。但实际有个坑：
 
 ```
-D:\LLM\office\              ← 技能和 .mcp.json 在这
-D:\LLM\Agent\xAgent\        ← 程序在这（兄弟目录）
+<项目根>/office\              ← 技能和 .mcp.json 在这
+<项目根>/Agent/xAgent\        ← 程序在这（兄弟目录）
 ```
 
 从程序目录启动时，往上翻永远找不到配置 —— 它们是**兄弟关系**，不是父子。

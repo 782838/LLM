@@ -6,7 +6,7 @@ MCP 2026-07-28 Python server. 5 tools over the pet hospital REST API.
 
 - Go backend `pethospital.exe` running on `http://127.0.0.1:8080`
 - For `followup_summary` only: local Ollama on `http://127.0.0.1:11435`
-  (bundled one: `D:\Anythingllm\resources\ollama\llm.exe serve`, model `qwen3-vl:4b-instruct`)
+  (bundled one: `<ollama 路径> serve`, model `qwen3-vl:4b-instruct`)
 
 ## Tools
 
