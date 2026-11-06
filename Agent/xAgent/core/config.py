@@ -12,11 +12,13 @@ class ConfigError(Exception):
 class Config:
     """一份模型接入配置。"""
 
-    def __init__(self, base_url, model, api_key="", timeout=DEFAULT_TIMEOUT):
+    def __init__(self, base_url, model, api_key="", timeout=DEFAULT_TIMEOUT,
+                 context_window=None):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = _clean_key(api_key)
         self.timeout = timeout
+        self.context_window = context_window
         self.sections = {}  # load() 会把解析好的小节塞进来
 
     @property
@@ -127,11 +129,23 @@ def load(filename="config.ini"):
         except ValueError:
             timeout = DEFAULT_TIMEOUT
 
+    # 上下文窗口大小。模型的 /v1/models 接口不返回这个信息，
+    # 所以允许在配置里手动指定；不写就用默认 128k，界面上标「默认」。
+    context_window = None
+    if raw.get("context_window"):
+        try:
+            value = int(raw["context_window"])
+            if value > 0:
+                context_window = value
+        except ValueError:
+            context_window = None
+
     cfg = Config(
         base_url=raw["base_url"],
         model=raw["model"],
         api_key=raw.get("api_key", ""),
         timeout=timeout,
+        context_window=context_window,
     )
     cfg.sections = sections
     return cfg

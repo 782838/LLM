@@ -70,6 +70,7 @@ python main.py --check
 | `F1` | 显示工具清单 |
 | `F2` | 显示技能清单 |
 | `Ctrl+M` | 切换模型 |
+| `/compact` | 压缩上下文（输入框里敲，不是快捷键） |
 | `Ctrl+C` | 退出 |
 
 ## 界面
@@ -109,7 +110,7 @@ python main.py --check
 
 **左侧边栏**：模型名、工具清单（前 6 个）、技能清单（前 6 个）、会话轮数。技能加载有问题时用 `!` 标出。
 
-## 19 个工具
+## 20 个工具
 
 时间与历法：
 
@@ -561,6 +562,81 @@ D:\LLM\Agent\xAgent\        ← 程序在这（兄弟目录）
 第 3 级靠程序目录下的 `.last-project-root` 文件实现。第一次从正确目录启动时会自动记下来，
 之后从任何目录启动都能用。**前两级永远优先**，不覆盖作业要求的行为。
 
+## 上下文压缩与历史检索
+
+上下文窗口有限，长任务迟早会撑满。这一块负责在快满时把历史压成摘要，
+同时把原文归档，需要时用 `recallContext` 翻回来。
+
+### 怎么触发
+
+输入 `/compact`：
+
+```
+你：/compact
+```
+
+也会在上下文超过窗口 60% 时提示你执行。
+
+### 压缩流程
+
+顺序不能变，任何一步失败都保留原上下文：
+
+```
+1. 归档 ── 把完整 history 写成 JSONL，失败就中止
+2. 生成摘要 ── 调 LLM，**工具列表传空**，从机制上禁止压缩期间调工具
+3. 校验摘要 ── 空、太短、像报错、比原文还长，都拒绝
+4. 替换 history ── 保留 System Prompt 和工具定义，只换 history
+```
+
+**第 3 步的「比原文还长」是个真实踩过的坑**：原对话只有 13 条消息时，
+模型很听话地写了 5000 token 摘要，压缩完反而更大了。现在会自适应给目标长度，
+原文 200 token 就让它写几十 token。
+
+### 归档
+
+```
+<项目根>/.agents/context/20261022-153000.jsonl
+```
+
+一行一条消息，保留 `role` / `content` / `tool_calls` / `tool_call_id` / 顺序号 / 时间戳。
+
+### 压缩后的 history
+
+```
+[
+  {"role": "user", "content": "【上下文摘要】\n\n…\n\n此前上下文已于 … 归档，如需查找请用 recallContext"},
+  {"role": "assistant", "content": "已了解上述上下文，可以继续。"}
+]
+```
+
+System Prompt 和工具定义**不在 history 里**，由 Agent 单独保留，所以技能清单和
+20 个工具在压缩后照样可用。
+
+### 压缩对比面板
+
+压缩成功自动弹出两栏浮层，左边原文右边摘要，都能滚动，`Esc` 或点「关闭」关掉。
+
+### recallContext
+
+```python
+recallContext(text="deck.pptx")                       # 搜所有归档
+recallContext(text="GIL", id="20261022-153000")       # 只搜指定归档
+```
+
+纯关键词匹配，返回片段 + 归档编号 + 消息位置。结果长度有上限，避免又撑爆上下文。
+
+### 上下文用量显示
+
+状态栏一直显示：
+
+```
+deepseek-ai/DeepSeek-V4.1-Flash-1017  │  20 工具  │  3 技能  │  上下文 4.5k / 128.0k（默认）  3.5%
+```
+
+- **真实 token 数**：请求时带 `stream_options.include_usage`，用 API 返回的 `prompt_tokens`
+- **拿不到就估算**：按字符数折中，宁可高估
+- **窗口大小**：`/v1/models` 不返回这个信息，可以在 `config.ini` 写 `context_window = 131072`；不写就用 128k 并在界面上标「默认」
+
 ## 测试
 
 ```
@@ -572,7 +648,9 @@ python _test_cli.py        # 56 项：RunCli 的参数、超时、截断、编�
 python _test_skills.py     # 86 项：技能发现、注入、按需加载、创建、路径安全
 python _test_office.py     # 46 项：officeDoc / officeHelp，真实生成三种文档
 python _test_mcp.py        # 50 项：配置解析、名字映射、结果归一化、故障隔离、真实连接
-python _test_models.py     # 39 项：模型列表、写回配置、项目根定位、选择器与点击
+python _test_models.py     # 41 项：模型列表、写回配置、项目根定位、选择器与点击
+python _test_context.py    # 85 项：token 估算、归档、压缩 Prompt、摘要校验、检索
+python _test_compact_ui.py # 12 项：/compact 拦截、输入限制、对比浮层
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

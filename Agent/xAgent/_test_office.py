@@ -41,7 +41,7 @@ print("=" * 70)
 check("能在默认路径找到 officecli", OT.find_officecli() is not None, str(OT.find_officecli()))
 check("officeDoc 已注册", "officeDoc" in reg)
 check("officeHelp 已注册", "officeHelp" in reg)
-check("工具总数 19", len(reg) == 19, str(len(reg)))
+check("工具总数 20", len(reg) == 20, str(len(reg)))
 
 print()
 print("=" * 70)

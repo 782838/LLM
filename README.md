@@ -7,7 +7,7 @@
 - **AnythingLLMServer** —— 单文件网页上传文档，让 AnythingLLM 完成向量化。
 - **Agent/Practice01** —— `chat.py`，和大模型循环对话：流式打字机输出，每轮把全部聊天记录发给模型。
 - **Agent/Practice02** —— `chat.py`，在 Practice01 基础上加 function call：模型自己决定调工具，共 12 个函数。
-- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行、技能加载/创建、Office 文档、MCP Client，共 19 个本地工具 + 任意 MCP Server 的工具。
+- **Agent/xAgent** —— 把 Practice02 改造成 `core` + `tui` 两层：业务逻辑不依赖界面，终端界面用 Textual；再加联网、命令行、技能加载/创建、Office 文档、MCP Client，共 20 个本地工具 + 任意 MCP Server 的工具。
 
 Practice01 / Practice02 用法：复制 `config.example.ini` 为 `config.ini`，填自己的接口地址、模型名、密钥，然后 `python chat.py`。
 
@@ -39,7 +39,7 @@ xAgent 的联网工具还需要在 `config.ini` 里配一个 `[search]` 小节�
 
 ## xAgent 的工具清单
 
-比 Practice02 多七个工具，共 19 个。前 12 个与上面相同，另外七个是：
+比 Practice02 多八个工具，共 20 个。前 12 个与上面相同，另外八个是：
 
 - `searchWeb` —— 调百度千帆 AI 搜索，返回搜索摘要和参考来源的标题、链接、站点、时间。API Key 从 `config.ini` 的 `[search]` 小节读 `baidu_qianfan_api_key`，不在代码里硬编码。
 - `fetchWeb` —— 用 `subprocess` 调本地 `curl` 抓网页 HTML，再用 `trafilatura` 提取正文转 Markdown。保留标题、段落、列表、表格、链接，去掉导航栏、广告、页脚。curl 走参数列表方式，不用 `shell=True`。
@@ -48,6 +48,7 @@ xAgent 的联网工具还需要在 `config.ini` 里配一个 `[search]` 小节�
 - `createSkill` —— 让模型自己创建新技能，在 `.agents/skills/<name>/` 下生成 `SKILL.md`。技能名只允许小写字母、数字和连字符；内容必须包含 YAML Frontmatter（`name`、`description`）和正文；已存在的不覆盖；附件目录由模型继续调 `createDirectory`、`createFile` 补充。
 - `officeDoc` —— 读写 Office 文档（`.docx` / `.xlsx` / `.pptx`），底层调 officecli。`args` 传子命令和参数数组，比如 `["create", "deck.pptx"]`、`["add", "deck.pptx", "/", "--type", "slide", "--prop", "title=标题"]`。不用装 Office。
 - `officeHelp` —— 查 officecli 的语法。不确定元素属性或命令写法时先查它，比猜错重试快。
+- `recallContext` —— 检索上下文压缩前保存的原始归档。`text` 是必需关键词，`id` 可选指定归档编号。不传 `id` 就在所有归档里搜。
 
 这几个工具都把错误转成给模型看的文本，不抛异常打断对话：缺 Key、Key 是占位符、HTTP 401/403/429/5xx、网络不可达、超时、域名解析失败、JS 渲染页提取不到正文、HTML 解析失败、正文超长截断、程序不存在、参数类型不对、技能不存在、路径越权，各有对应的清晰提示。
 
@@ -100,7 +101,7 @@ xAgent 能连外部 MCP Server，把对方的工具当成自己的工具用。
 ```
 
 - 支持 `streamable_http` 和 `stdio` 两种协议
-- MCP 工具自动加服务器前缀（`Bazi-MCP__getBaziDetail`），不会和本地 19 个工具撞名
+- MCP 工具自动加服务器前缀（`Bazi-MCP__getBaziDetail`），不会和本地 20 个工具撞名
 - 一个 Server 连不上只记一笔，不影响其他工具
 - 用后台事件循环把 async 的 MCP SDK 桥接成同步调用，会话常驻不重连
 
@@ -114,7 +115,7 @@ Agent/xAgent/
 │  ├─ config.py   配置读取，支持 [search] 小节
 │  ├─ skills.py   技能发现、System Prompt 注入、按需加载
 │  ├─ llm/        流式请求与 tool_calls 分片归并
-│  └─ tools/      19 个工具
+│  └─ tools/      20 个工具
 ├─ tui/           Textual 界面，只做显示和输入
 └─ interfaces/    界面契约，说明新界面要实现哪 6 个回调
 ```

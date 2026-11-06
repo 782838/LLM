@@ -14,6 +14,7 @@ from core.agent import Agent
 from core.config import find_config, load, ConfigError
 
 from . import events
+from .compact_view import CompactView
 from .model_picker import ModelPicker
 from .widgets import Conversation, PromptInput, Sidebar
 
@@ -210,18 +211,19 @@ class XAgentApp(App):
         self._set_status()
 
     def _set_status(self, override=None):
+        """刷新状态栏。
+
+        override 用于临时提示（「思考中…」这类），
+        正常状态下会带上上下文用量。
+        """
         if override:
-            text = override
-        else:
-            agent = self._agent
-            model = agent.config.model or "（未配置模型）"
-            text = "%s  │  %d 工具  │  %d 技能  │  %s" % (
-                model,
-                len(agent.tools),
-                len(agent.skills),
-                self._where or "-",
-            )
-        self.query_one("#status", Static).update(text)
+            self.query_one("#status", Static).update(override)
+            return
+
+        try:
+            self._update_context_status()
+        except Exception:
+            pass
 
     # ---- 用户输入 ----
     def on_prompt_input_submitted(self, event):
@@ -229,8 +231,21 @@ class XAgentApp(App):
         self.query_one("#prompt", PromptInput).clear_text()
 
         conv = self.query_one(Conversation)
+
+        # 斜杠命令走单独的分支，不当成提示词发给模型
+        if text.startswith("/"):
+            self._handle_command(text)
+            return
+
         if self._busy:
             conv.add_error("上一轮还没结束，稍等。")
+            return
+
+        # 上下文超阈值时拦住输入，只有 /compact 能过
+        ok, reason = self._agent.can_accept_input()
+        if not ok:
+            conv.add_error(reason)
+            self._update_context_status()
             return
 
         conv.add_user(text)
@@ -238,11 +253,129 @@ class XAgentApp(App):
         self._set_status("思考中…")
         self.run_worker(lambda: self._agent.ask(text), thread=True, exclusive=True)
 
+    def _handle_command(self, text):
+        """处理斜杠命令。"""
+        conv = self.query_one(Conversation)
+        cmd = text.strip().lower()
+
+        if cmd in ("/compact", "/c"):
+            self.action_compact()
+        elif cmd in ("/help", "/?"):
+            conv.add_system(
+                "可用命令：\n"
+                "  /compact  压缩上下文（超阈值时必需）\n"
+                "  /help     显示这条帮助\n"
+                "快捷键：Ctrl+M 换模型，Ctrl+N 新会话，F1 工具，F2 技能"
+            )
+        else:
+            conv.add_error(
+                "未知命令：%s。可用命令：/compact、/help" % text.strip()
+            )
+
+    # ---- 上下文压缩 ----
+    def action_compact(self):
+        """执行 /compact。"""
+        conv = self.query_one(Conversation)
+
+        if self._busy:
+            conv.add_error("上一轮还没结束，稍等再压缩。")
+            return
+
+        usage = self._agent.context_usage()
+        if usage.used < 100:
+            conv.add_system("当前会话内容很少，不需要压缩。")
+            return
+
+        # 对话太短时压缩会失败（摘要不可能比原文更短），提前拦住
+        from core import context as ctx_mod
+
+        hist_tokens = ctx_mod.history_tokens(self._agent.history)
+        if hist_tokens < 800:
+            conv.add_system(
+                "当前历史只有约 %d tokens，压缩不会有收益"
+                "（摘要很难比原文更短）。等对话长一些再压缩。" % hist_tokens
+            )
+            return
+
+        conv.add_system("开始压缩上下文，正在归档原始记录…")
+        self._busy = True
+        self._set_status("压缩中…")
+
+        def progress(*args):
+            """从工作线程里更新界面要 post 消息。"""
+            self.call_from_thread(self._on_compact_progress, *args)
+
+        def work():
+            return self._agent.compact(on_event=progress)
+
+        self.run_worker(work, thread=True, exclusive=True, name="compact")
+
+    def _on_compact_progress(self, stage, *args):
+        conv = self.query_one(Conversation)
+        if stage == "archiving":
+            conv.add_system("正在归档原始上下文…")
+        elif stage == "summarizing":
+            conv.add_system("正在调用模型生成摘要…")
+        elif stage == "failed":
+            conv.add_error("压缩失败：%s" % (args[0] if args else ""))
+
+    def on_worker_state_changed(self, event):
+        """压缩 worker 结束后处理结果。"""
+        from textual.worker import WorkerState
+
+        if event.worker.name == "compact":
+            if event.state != WorkerState.SUCCESS:
+                self._busy = False
+                self._set_status()
+                self.query_one(Conversation).add_error(
+                    "压缩过程出错：%s" % event.worker.error
+                )
+                return
+
+            ok, payload = event.worker.result
+            self._busy = False
+            self._update_context_status()
+
+            if not ok:
+                self.query_one(Conversation).add_error(str(payload))
+                return
+
+            self.push_screen(CompactView(payload))
+            self.query_one(Conversation).add_system(
+                "上下文已压缩，归档编号 %s。可以继续对话了。"
+                % payload.get("archive_id", "?")
+            )
+            self.query_one("#prompt", PromptInput).focus()
+            return
+
+        # 模型列表是另一个 worker，交给原来的处理函数
+        self._handle_model_worker(event)
+
     def _finish_turn(self):
         self._busy = False
         self.query_one(Sidebar).bump_turn()
-        self._set_status()
+        self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()
+
+    def _update_context_status(self):
+        """刷新状态栏，显示上下文用量。"""
+        try:
+            usage = self._agent.context_usage()
+        except Exception:
+            return
+
+        agent = self._agent
+        parts = [
+            agent.config.model or "（未配置模型）",
+            "%d 工具" % len(agent.tools),
+            "%d 技能" % len(agent.skills),
+            "上下文 %s" % usage.summary(),
+        ]
+
+        if usage.should_warn:
+            parts.append("⚠ 需 /compact")
+
+        self.query_one("#status", Static).update("  │  ".join(parts))
 
     # ---- Agent 事件 ----
     def on_assistant_start(self, _event):
@@ -323,8 +456,8 @@ class XAgentApp(App):
         self.run_worker(fetch, thread=True, exclusive=False,
                         name="list-models", group="models")
 
-    def on_worker_state_changed(self, event):
-        """拿到模型列表后弹选择器。"""
+    def _handle_model_worker(self, event):
+        """模型列表 worker 结束后弹选择器。"""
         from textual.worker import WorkerState
 
         if event.worker.name != "list-models":

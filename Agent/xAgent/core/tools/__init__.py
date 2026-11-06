@@ -12,6 +12,7 @@ def default_registry(skills=None, skills_root=None, mcp_manager=None):
     """
     from . import (
         cli_tools,
+        context_tools,
         datetime_tools,
         file_tools,
         office_tools,
@@ -35,6 +36,10 @@ def default_registry(skills=None, skills_root=None, mcp_manager=None):
 
     # loadSkill / createSkill 需要注入技能列表，单独处理
     for tool in skill_tools.build_tools(skills=skills, root=skills_root):
+        reg.register(tool)
+
+    # recallContext 需要知道去哪找归档
+    for tool in context_tools.build_tools(root=skills_root):
         reg.register(tool)
 
     # MCP 工具最后注册，撞名时会被跳过而不覆盖本地工具

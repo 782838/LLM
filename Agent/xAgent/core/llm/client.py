@@ -14,10 +14,12 @@ class LLMError(Exception):
 class Delta:
     """一帧流式响应解析出来的内容。"""
 
-    def __init__(self, content="", tool_calls=None, finish_reason=None):
+    def __init__(self, content="", tool_calls=None, finish_reason=None, usage=None):
         self.content = content
         self.tool_calls = tool_calls or []
         self.finish_reason = finish_reason
+        # 有些服务在最后一个分片里给 usage，有些全程给 null
+        self.usage = usage
 
     def __repr__(self):
         return "Delta(content=%r, tool_calls=%d)" % (self.content[:20], len(self.tool_calls))
@@ -72,6 +74,9 @@ class Client:
             "model": self.config.model,
             "messages": messages,
             "stream": True,
+            # 不传这个，ModelScope 的流式响应 usage 全程是 null。
+            # 传了之后最后一个分片会带准确的 prompt_tokens / completion_tokens。
+            "stream_options": {"include_usage": True},
         }
         if tools:
             body["tools"] = tools
@@ -105,13 +110,22 @@ class Client:
                     chunk = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
+
+                # usage 可能出现在任意分片里，记下来带上
+                usage = chunk.get("usage")
+
                 for choice in chunk.get("choices") or []:
                     delta = choice.get("delta") or {}
                     yield Delta(
                         content=delta.get("content") or "",
                         tool_calls=delta.get("tool_calls") or [],
                         finish_reason=choice.get("finish_reason"),
+                        usage=usage,
                     )
+
+                # 有些服务把 usage 放在没有 choices 的独立分片里
+                if usage and not chunk.get("choices"):
+                    yield Delta(usage=usage)
         except (urllib.error.URLError, TimeoutError) as e:
             raise LLMError("读取响应中断：%s" % e)
         finally:

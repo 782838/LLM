@@ -13,7 +13,9 @@
     on_error(message)                    出错
 """
 import json
+import os
 
+from . import context as context_mod
 from . import skills as skill_store
 from .config import Config
 from .llm.client import Client, LLMError, ToolCallBuffer
@@ -60,6 +62,18 @@ class Agent:
         self.config = config or Config("http://127.0.0.1:11437/v1", "")
         self.client = Client(self.config)
         self.history = []
+
+        # 上下文监控用：上一次请求的真实 prompt_tokens，和当时的历史估算值
+        self.last_prompt_tokens = None
+        self.last_hist_tokens = 0
+
+        # 项目根：技能、MCP、归档都按它定位
+        from .project import find_project_root
+
+        self.root, _note = find_project_root(skills_root or os.getcwd())
+
+        # 压缩期间禁止普通输入，由界面读这个标记
+        self.compacting = False
 
         # 发现技能。初始化阶段只读 name 和 description，不读正文。
         self.skills = []
@@ -140,6 +154,142 @@ class Agent:
             return self.mcp.close()
         return []
 
+    # ---- 上下文管理 ----
+    def context_usage(self):
+        """算当前上下文用量，返回 Usage 对象。"""
+        window, is_default = context_mod.resolve_window(self.config)
+        usage, hist = context_mod.compute_usage(
+            system_prompt=self.system_prompt,
+            history=self.history,
+            window=window,
+            is_default=is_default,
+            real_prompt_tokens=self.last_prompt_tokens,
+            last_hist_tokens=self.last_hist_tokens,
+        )
+        return usage
+
+    def can_accept_input(self):
+        """能不能接受新提示词。
+
+        两种情况拒绝：
+            1. 正在压缩
+            2. 上下文超阈值还没压缩
+        """
+        if self.compacting:
+            return False, "正在压缩上下文，请稍候。"
+        usage = self.context_usage()
+        if usage.should_warn:
+            return False, (
+                "上下文已用 %s，达到窗口的 %.0f%%，请先执行 /compact 压缩。"
+                % (usage.summary(), usage.percent)
+            )
+        return True, None
+
+    def compact(self, on_event=None):
+        """执行上下文压缩。
+
+        on_event 是可选回调，用来把进度告诉界面：
+            on_event("archiving")      开始归档
+            on_event("summarizing")    开始调 LLM
+            on_event("done", result)   成功，result 是包含前后内容的字典
+            on_event("failed", msg)    失败
+
+        返回 (成功与否, 说明或结果字典)。
+
+        顺序很重要：
+            归档 → 生成摘要 → 校验 → 替换
+        任何一步失败都保留原上下文。
+        """
+        def emit(*args):
+            if on_event:
+                try:
+                    on_event(*args)
+                except Exception:
+                    pass
+
+        if self.compacting:
+            return False, "已经在压缩中了。"
+
+        if not self.history:
+            return False, "当前会话没有历史消息，不需要压缩。"
+
+        self.compacting = True
+        try:
+            return self._do_compact(emit)
+        finally:
+            self.compacting = False
+
+    def _do_compact(self, emit):
+        # ---- 1. 先归档，失败就中止 ----
+        emit("archiving")
+        archive_id, path, err = context_mod.archive(self.root, self.history)
+        if err:
+            emit("failed", err)
+            return False, "归档失败，已中止压缩：%s" % err
+
+        before_text = self._history_as_text()
+
+        # ---- 2. 调 LLM 生成摘要，不带任何工具 ----
+        emit("summarizing")
+        before_tokens = context_mod.history_tokens(self.history)
+        messages = context_mod.build_compact_messages(
+            self.history, system_prompt=self.system_prompt
+        )
+
+        summary = ""
+        try:
+            # tools 传空列表 —— 从机制上禁止压缩期间调用工具
+            for delta in self.client.stream(messages, tools=None):
+                if delta.content:
+                    summary += delta.content
+        except LLMError as e:
+            emit("failed", str(e))
+            return False, "生成摘要失败，原上下文已保留：%s" % e
+
+        # ---- 3. 校验摘要 ----
+        ok, reason = context_mod.validate_summary(summary, original_tokens=before_tokens)
+        if not ok:
+            emit("failed", reason)
+            return False, "摘要不可用，原上下文已保留：%s" % reason
+
+        # ---- 4. 替换 history。System Prompt 和工具定义不动 ----
+        new_history = context_mod.build_compacted_history(summary, archive_id)
+        self.history = new_history
+
+        # 换完上下文，之前的 usage 记录失效
+        self.last_prompt_tokens = None
+        self.last_hist_tokens = 0
+
+        after_text = self._history_as_text()
+
+        result = {
+            "archive_id": archive_id,
+            "archive_path": path,
+            "before": before_text,
+            "after": after_text,
+            "summary": summary,
+            "before_tokens": context_mod.estimate_tokens(before_text),
+            "after_tokens": context_mod.estimate_tokens(after_text),
+        }
+        emit("done", result)
+        return True, result
+
+    def _history_as_text(self):
+        """把 history 渲染成可读文本，给对比面板用。"""
+        lines = []
+        for msg in self.history:
+            role = msg.get("role", "?")
+            content = msg.get("content")
+            if content:
+                lines.append("【%s】\n%s" % (role, content))
+            for call in msg.get("tool_calls") or []:
+                fn = call.get("function") or {}
+                lines.append(
+                    "【%s → 调用 %s】\n%s"
+                    % (role, fn.get("name", "?"), fn.get("arguments", ""))
+                )
+        return "\n\n".join(lines)
+
     # ---- 主流程 ----
     def ask(self, text):
         """提一个问题，跑完整个「回答-调工具-再回答」循环。
@@ -171,12 +321,20 @@ class Agent:
             answer = ""
             self._emit("on_assistant_start")
 
+            last_usage = None
             for delta in self.client.stream(self.messages(), schemas):
+                if delta.usage:
+                    last_usage = delta.usage
                 if delta.content:
                     answer += delta.content
                     self._emit("on_assistant_delta", delta.content)
                 if delta.tool_calls:
                     buffer.feed(delta.tool_calls)
+
+            # 记下这次请求的真实 token 用量，供上下文监控用
+            if last_usage:
+                self.last_prompt_tokens = last_usage.get("prompt_tokens")
+                self.last_hist_tokens = context_mod.history_tokens(self.history)
 
             calls = [ToolCall(c["id"], c["name"], c["arguments"]) for c in buffer.ready()]
             self._emit("on_assistant_end", answer, calls)

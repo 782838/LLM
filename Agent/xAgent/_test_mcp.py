@@ -263,7 +263,7 @@ check("status_lines 报告失败", any("失败" in l for l in mgr.status_lines()
 # 关键：连不上时本地工具仍然全部可用
 from core.tools import default_registry
 reg = default_registry(mcp_manager=mgr)
-check("连不上时本地 19 个工具都在", len(reg) == 19, str(len(reg)))
+check("连不上时本地 20 个工具都在", len(reg) == 20, str(len(reg)))
 check("RunCli 仍在", "RunCli" in reg)
 check("officeDoc 仍在", "officeDoc" in reg)
 r, e = reg.execute("isLeapYear", {"year": 2024})
@@ -295,8 +295,8 @@ else:
         # 注册进真实 Registry
         live_reg = default_registry(mcp_manager=live)
         check("MCP 工具进了 Registry",
-              len(live_reg) == 19 + len(live.tools),
-              "%d vs 19+%d" % (len(live_reg), len(live.tools)))
+              len(live_reg) == 20 + len(live.tools),
+              "%d vs 20+%d" % (len(live_reg), len(live.tools)))
 
         # 真实调用一个无必填参数的工具
         free_tools = [t for t in live.tools if not t.required]

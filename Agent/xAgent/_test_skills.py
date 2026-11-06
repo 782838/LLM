@@ -199,7 +199,7 @@ print("第 4 步：动态加载原则 + 与已有工具协作")
 print("=" * 72)
 
 reg = default_registry(skills=found, skills_root=SANDBOX)
-check("工具数是 19", len(reg) == 19, str(len(reg)))
+check("工具数是 20", len(reg) == 20, str(len(reg)))
 check("有 loadSkill", "loadSkill" in reg)
 check("原有工具都在", all(
     n in reg for n in ["RunCli", "readFile", "searchWeb", "fetchWeb", "getDate", "isLeapYear"]
