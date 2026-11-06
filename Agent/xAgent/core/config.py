@@ -2,7 +2,6 @@
 import os
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11437/v1"
-DEFAULT_TIMEOUT = 300
 
 
 class ConfigError(Exception):
@@ -12,7 +11,7 @@ class ConfigError(Exception):
 class Config:
     """一份模型接入配置。"""
 
-    def __init__(self, base_url, model, api_key="", timeout=DEFAULT_TIMEOUT,
+    def __init__(self, base_url, model, api_key="", timeout=None,
                  context_window=None):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -122,12 +121,12 @@ def load(filename="config.ini"):
     if not raw.get("model"):
         raise ConfigError("%s 里缺少 model。" % path)
 
-    timeout = DEFAULT_TIMEOUT
+    timeout = 300
     if raw.get("timeout"):
         try:
             timeout = int(raw["timeout"])
         except ValueError:
-            timeout = DEFAULT_TIMEOUT
+            timeout = 300
 
     # 上下文窗口大小。模型的 /v1/models 接口不返回这个信息，
     # 所以允许在配置里手动指定；不写就用默认 128k，界面上标「默认」。
@@ -169,4 +168,4 @@ def load_or_default(filename="config.ini"):
     try:
         return load(filename)
     except ConfigError:
-        return Config(DEFAULT_BASE_URL, "")
+        return Config(DEFAULT_BASE_URL or "http://127.0.0.1:11437/v1", "")

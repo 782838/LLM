@@ -13,11 +13,9 @@ import shutil
 import subprocess
 
 from .registry import Tool
+from ..settings import settings
 
 # officecli 打一次命令生成/编辑可能要几秒，给足时间
-DEFAULT_TIMEOUT = 60
-MAX_TIMEOUT = 300
-MAX_OUTPUT_CHARS = 4000
 
 def _exe_candidates():
     """算出 officecli 的候选路径。
@@ -68,13 +66,13 @@ def decode(raw):
     return raw.decode("utf-8", errors="replace")
 
 
-def truncate(text, limit=MAX_OUTPUT_CHARS):
+def truncate(text, limit=settings.office_max_output):
     if len(text) <= limit:
         return text, False
     return text[:limit].rstrip() + "\n……（输出过长，已截断）", True
 
 
-def run_officecli(args, timeout=DEFAULT_TIMEOUT):
+def run_officecli(args, timeout=None):
     """跑一条 officecli 命令，返回 (stdout, stderr, 退出码, 错误信息)。"""
     exe = find_officecli()
     if not exe:
@@ -86,8 +84,8 @@ def run_officecli(args, timeout=DEFAULT_TIMEOUT):
     try:
         timeout = int(timeout)
     except (TypeError, ValueError):
-        timeout = DEFAULT_TIMEOUT
-    timeout = max(1, min(timeout, MAX_TIMEOUT))
+        timeout = settings.office_timeout
+    timeout = max(1, min(timeout, settings.office_max_timeout))
 
     env = dict(os.environ)
     # 关掉常驻进程，避免留下后台进程占着文件
@@ -149,7 +147,7 @@ def format_result(args, stdout, stderr, code):
     return "\n".join(lines)
 
 
-def office_doc(args=None, timeout=DEFAULT_TIMEOUT):
+def office_doc(args=None, timeout=None):
     """执行一条 officecli 命令。
 
     args 是参数数组，原样传给 officecli，例如：

@@ -1,22 +1,97 @@
 """xAgent 的终端界面。
 
-参照 opencode 的对话流形态重写过：
+参照 opencode 的对话流形态：
     左侧边栏放上下文信息，右侧是消息卡片流，底部是输入区。
 业务逻辑一行都没有 —— core/ 完全不知道界面的存在。
+
+几个关键设计：
+    - 斜杠命令统一由 tui/commands.py 定义，这里只负责执行
+    - 输入 / 自动弹出补全面板
+    - MCP 在后台线程异步连接，连完刷新侧边栏，不阻塞界面启动
+    - 首次运行没有 config.ini 时自动生成并弹窗提示
 """
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, Footer, Header, Static
 
+from core import agents_md
+from core import bootstrap
 from core import models as models_mod
+from core import session as session_mod
 from core.agent import Agent
 from core.config import find_config, load, ConfigError
+from core.settings import settings
 
+from . import commands as cmd_mod
 from . import events
+from .command_palette import CommandPalette
 from .compact_view import CompactView
 from .model_picker import ModelPicker
+from .session_picker import SessionPicker
 from .widgets import Conversation, PromptInput, Sidebar
+
+
+class FirstRunDialog(ModalScreen):
+    """首次运行提示：配置文件刚生成，改完要重启。"""
+
+    BINDINGS = [Binding("escape", "close", "关闭", show=True)]
+
+    CSS = """
+    FirstRunDialog {
+        align: center middle;
+    }
+
+    #firstrun-box {
+        width: 76;
+        height: 16;
+        background: #111827;
+        border: thick #fbbf24;
+        padding: 1 2;
+    }
+
+    #firstrun-title {
+        height: 1;
+        color: #fde68a;
+        text-style: bold;
+    }
+
+    #firstrun-body {
+        height: 1fr;
+        color: #cbd5e1;
+    }
+
+    #firstrun-foot {
+        height: 3;
+        align: right middle;
+    }
+    """
+
+    def __init__(self, path, **kwargs):
+        super().__init__(**kwargs)
+        self.path = path
+
+    def compose(self):
+        with Vertical(id="firstrun-box"):
+            yield Static("首次运行：已生成配置文件", id="firstrun-title")
+            yield Static(
+                "配置文件已创建：\n\n%s\n\n"
+                "请打开它，把 base_url / model / api_key 改成你自己的配置，"
+                "然后**重新启动程序**才能正常对话。\n\n"
+                "现在可以先用 /help 看看有哪些命令。" % self.path,
+                id="firstrun-body",
+            )
+            with Horizontal(id="firstrun-foot"):
+                yield Button("知道了", id="firstrun-ok", variant="primary")
+
+    def on_button_pressed(self, event):
+        if event.button.id == "firstrun-ok":
+            self.dismiss(None)
+
+    def action_close(self):
+        self.dismiss(None)
+
 
 CSS = """
 Screen {
@@ -40,14 +115,9 @@ Footer {
 
 /* ---------- 侧边栏 ---------- */
 #sidebar {
-    width: 28;
     background: #111827;
     border-right: solid #1e293b;
     padding: 1 1;
-}
-
-#sidebar-body {
-    width: 100%;
 }
 
 /* ---------- 对话区 ---------- */
@@ -124,35 +194,46 @@ class XAgentApp(App):
 
     BINDINGS = [
         Binding("ctrl+c", "quit", "退出", show=True),
-        Binding("ctrl+n", "new_session", "新会话", show=True),
+        Binding("ctrl+n", "do_new", "新会话", show=True),
         Binding("ctrl+m", "pick_model", "模型", show=True),
-        Binding("ctrl+l", "clear", "清屏", show=True),
-        Binding("f1", "show_tools", "工具", show=True),
-        Binding("f2", "show_skills", "技能", show=True),
+        Binding("ctrl+l", "do_clear", "清屏", show=True),
+        Binding("f1", "do_tools", "工具", show=True),
+        Binding("f2", "do_skills", "技能", show=True),
     ]
 
-    def __init__(self, agent=None, config_path=None):
+    def __init__(self, agent=None, config_path=None, skip_bootstrap=False):
         super().__init__()
         self._agent = agent
         self._config_path = config_path
+        self._skip_bootstrap = skip_bootstrap
         self._busy = False
         self._where = ""
+        self._mcp_ready = False
+        self._bootstrap = None
 
     # ---- 组装 ----
     def compose(self):
         yield Header(show_clock=True)
         with Horizontal(id="body"):
             yield Sidebar(id="sidebar")
-            yield Conversation(id="conversation")
+            with Vertical():
+                yield Conversation(id="conversation")
+                yield CommandPalette(id="palette")
         yield Static("", id="status")
         yield PromptInput(id="prompt")
         yield Static(
-            " Enter 发送   Ctrl+J 换行   Ctrl+N 新会话   Ctrl+L 清屏   F1 工具   F2 技能",
+            " Enter 发送   / 命令   Ctrl+J 换行   Ctrl+M 模型   Ctrl+N 新会话   F1 工具   F2 技能",
             id="prompt-hint",
         )
         yield Footer()
 
     def on_mount(self):
+        # 侧边栏宽度从配置读
+        try:
+            self.query_one("#sidebar").styles.width = settings.sidebar_width
+        except Exception:
+            pass
+
         self._setup_agent()
         self.query_one("#prompt", PromptInput).focus()
 
@@ -169,13 +250,17 @@ class XAgentApp(App):
     def _setup_agent(self):
         conv = self.query_one(Conversation)
 
+        # 首次运行：确保有配置文件
+        if not self._skip_bootstrap:
+            self._bootstrap = bootstrap.ensure_config()
+
         if self._agent is None:
             try:
                 cfg = load(self._config_path or "config.ini")
-                self._agent = Agent(config=cfg)
+                self._agent = Agent(config=cfg, auto_load_mcp=False)
                 self._where = find_config(self._config_path or "config.ini") or ""
             except ConfigError as e:
-                self._agent = Agent()
+                self._agent = Agent(auto_load_mcp=False)
                 conv.add_error(str(e))
                 self._set_status("配置缺失")
                 return
@@ -190,6 +275,9 @@ class XAgentApp(App):
         agent.on_tool_end = lambda n, r, e: self.post_message(events.ToolFinished(n, r, e))
         agent.on_error = lambda m: self.post_message(events.AgentFailed(m))
 
+        # 开新会话，顺便注入 AGENTS.md
+        injected, note = agent.start_session()
+
         sidebar = self.query_one(Sidebar)
         sidebar.setup(
             agent.config.model,
@@ -201,47 +289,131 @@ class XAgentApp(App):
         conv.add_system(
             "输入问题后回车发送。技能从 .agents/skills/ 加载，正文按需通过 loadSkill 拉取。"
         )
-        # MCP 连接情况单独提示，方便确认 .mcp.json 有没有被扫到
-        if self._agent.mcp is not None:
-            conv.add_system("MCP：%s" % self._agent.mcp_summary())
-            for line in self._agent.mcp.status_lines():
-                conv.add_system("  " + line)
-            for note in self._agent.mcp_notes:
+        if injected:
+            conv.add_system(note)
+        elif note and "没有" not in note:
+            conv.add_system("AGENTS.md：" + note)
+
+        self._set_status()
+
+        # 异步连 MCP：界面先出来，连接在后台跑
+        self._start_mcp()
+
+        # 首次运行弹窗
+        if self._bootstrap and self._bootstrap.created:
+            self.push_screen(FirstRunDialog(self._bootstrap.path))
+        elif self._bootstrap and self._bootstrap.error:
+            conv.add_error("生成配置文件失败：%s" % self._bootstrap.error)
+
+    # ---- MCP 异步加载 ----
+    def _start_mcp(self):
+        """在后台线程连 MCP，连完刷新侧边栏。"""
+        sidebar = self.query_one(Sidebar)
+
+        if not settings.mcp_enabled:
+            sidebar.mcp_disabled()
+            return
+
+        sidebar.mcp_loading()
+
+        agent = self._agent
+
+        def work():
+            """后台线程：连接所有 MCP 服务器。"""
+            from core.mcp.manager import McpManager
+
+            mgr = McpManager(root=agent.root)
+            mgr.connect_all()
+            return mgr
+
+        self.run_worker(work, thread=True, exclusive=False, name="mcp-connect")
+
+    def _on_mcp_connected(self, mgr):
+        """MCP 连完了，更新侧边栏和工具表。"""
+        agent = self._agent
+        agent.mcp = mgr
+        agent.mcp_notes = list(mgr.notes)
+
+        # 把 MCP 工具注册进现有工具表
+        if mgr.tools:
+            added = mgr.register_into(agent.tools)
+        else:
+            added = 0
+
+        # 整理成侧边栏要的数据
+        servers = []
+        for s in mgr.servers:
+            if s.error:
+                servers.append((s.name, [], s.error))
+            else:
+                names = [getattr(t, "name", "?") for t in s.tools]
+                servers.append((s.name, names, None))
+
+        sidebar = self.query_one(Sidebar)
+        sidebar.mcp_update(servers, mgr.describe())
+        self._mcp_ready = True
+
+        conv = self.query_one(Conversation)
+        if mgr.tools:
+            conv.add_system("MCP 已连接：%s，新增 %d 个工具" % (mgr.describe(), added))
+        elif mgr.servers:
+            conv.add_system("MCP：%s" % mgr.describe())
+            for note in mgr.notes[:3]:
                 conv.add_system("  ! " + note)
+        else:
+            conv.add_system("MCP：没有配置服务器")
+
+        # 工具数变了，刷新状态栏和侧边栏
+        sidebar.setup(agent.config.model, agent.tool_names(),
+                      agent.skills, agent.skill_notes)
         self._set_status()
 
     def _set_status(self, override=None):
-        """刷新状态栏。
-
-        override 用于临时提示（「思考中…」这类），
-        正常状态下会带上上下文用量。
-        """
         if override:
             self.query_one("#status", Static).update(override)
             return
-
         try:
             self._update_context_status()
         except Exception:
             pass
 
+    def _update_context_status(self):
+        try:
+            usage = self._agent.context_usage()
+        except Exception:
+            return
+
+        agent = self._agent
+        parts = [
+            agent.config.model or "（未配置模型）",
+            "%d 工具" % len(agent.tools),
+            "%d 技能" % len(agent.skills),
+            "上下文 %s" % usage.summary(),
+        ]
+        if self._mcp_ready and agent.mcp is not None:
+            parts.append("MCP %d" % len(agent.mcp.tools))
+        if usage.should_warn:
+            parts.append("⚠ 需 /compact")
+
+        self.query_one("#status", Static).update("  │  ".join(parts))
+
     # ---- 用户输入 ----
     def on_prompt_input_submitted(self, event):
         text = event.value
         self.query_one("#prompt", PromptInput).clear_text()
+        self.query_one(CommandPalette).hide_panel()
 
         conv = self.query_one(Conversation)
 
-        # 斜杠命令走单独的分支，不当成提示词发给模型
+        # 斜杠命令走单独分支
         if text.startswith("/"):
-            self._handle_command(text)
+            self._run_command(text)
             return
 
         if self._busy:
             conv.add_error("上一轮还没结束，稍等。")
             return
 
-        # 上下文超阈值时拦住输入，只有 /compact 能过
         ok, reason = self._agent.can_accept_input()
         if not ok:
             conv.add_error(reason)
@@ -253,28 +425,187 @@ class XAgentApp(App):
         self._set_status("思考中…")
         self.run_worker(lambda: self._agent.ask(text), thread=True, exclusive=True)
 
-    def _handle_command(self, text):
-        """处理斜杠命令。"""
+    def on_prompt_input_changed(self, event):
+        """输入变化时更新补全面板。"""
+        palette = self.query_one(CommandPalette)
+        try:
+            text = event.text_area.text
+        except AttributeError:
+            text = (event.value or "")
+        palette.update_filter(text)
+
+    def on_command_palette_chosen(self, event):
+        """Tab 补全：把命令名填进输入框。"""
+        cmd = event.command
+        prompt = self.query_one("#prompt", PromptInput)
+        prompt.text = cmd.text + " "
+        self.query_one(CommandPalette).hide_panel()
+
+    # ---- 命令执行 ----
+    def _run_command(self, text):
+        cmd = cmd_mod.resolve(text)
         conv = self.query_one(Conversation)
-        cmd = text.strip().lower()
 
-        if cmd in ("/compact", "/c"):
-            self.action_compact()
-        elif cmd in ("/help", "/?"):
-            conv.add_system(
-                "可用命令：\n"
-                "  /compact  压缩上下文（超阈值时必需）\n"
-                "  /help     显示这条帮助\n"
-                "快捷键：Ctrl+M 换模型，Ctrl+N 新会话，F1 工具，F2 技能"
-            )
+        if cmd is None:
+            word = text.strip().split()[0] if text.strip() else text
+            conv.add_error("未知命令：%s。输入 /help 看可用命令。" % word)
+            return
+
+        handler = getattr(self, cmd.handler, None)
+        if handler is None:
+            conv.add_error("命令 %s 还没实现" % cmd.text)
+            return
+
+        handler()
+
+    # ---- 各命令的具体实现 ----
+    def do_new(self):
+        """新建会话，先把当前会话保存掉。"""
+        conv = self.query_one(Conversation)
+        agent = self._agent
+
+        if self._busy:
+            conv.add_error("上一轮还没结束，稍等。")
+            return
+
+        saved_msg = ""
+        if agent.history and settings.auto_save_on_new:
+            sid, detail = agent.save_session()
+            if sid:
+                saved_msg = "已把上一个会话保存为 %s。" % sid
+            else:
+                saved_msg = "上一个会话保存失败：%s" % detail
+
+        injected, note = agent.start_session()
+
+        conv.remove_children()
+        if saved_msg:
+            conv.add_system(saved_msg)
+        conv.add_system("已开始新会话。")
+        if injected:
+            conv.add_system(note)
+
+        sidebar = self.query_one(Sidebar)
+        sidebar.setup(agent.config.model, agent.tool_names(),
+                      agent.skills, agent.skill_notes)
+        self._update_context_status()
+        self.query_one("#prompt", PromptInput).focus()
+
+    def do_save(self):
+        """保存当前会话。"""
+        conv = self.query_one(Conversation)
+        sid, detail = self._agent.save_session()
+        if sid:
+            conv.add_system("已保存会话 %s" % sid)
         else:
-            conv.add_error(
-                "未知命令：%s。可用命令：/compact、/help" % text.strip()
-            )
+            conv.add_error("保存失败：%s" % detail)
 
-    # ---- 上下文压缩 ----
+    def do_resume(self):
+        """弹出历史会话列表。"""
+        conv = self.query_one(Conversation)
+        if self._busy:
+            conv.add_error("上一轮还没结束，稍等。")
+            return
+
+        sessions = self._agent.list_sessions()
+        self.push_screen(SessionPicker(sessions), self._after_resume)
+
+    def _after_resume(self, session_id):
+        if not session_id:
+            return
+
+        conv = self.query_one(Conversation)
+        ok, detail = self._agent.resume_session(session_id)
+        if not ok:
+            conv.add_error(detail)
+            return
+
+        # 把恢复的历史渲染到对话区
+        conv.remove_children()
+        conv.add_system(detail)
+        for msg in self._agent.history:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "user" and content:
+                conv.add_user(str(content)[:2000])
+            elif role == "assistant" and content:
+                conv.add_answer(str(content)[:2000])
+
+        sidebar = self.query_one(Sidebar)
+        sidebar.setup(self._agent.config.model, self._agent.tool_names(),
+                      self._agent.skills, self._agent.skill_notes)
+        self._update_context_status()
+        self.query_one("#prompt", PromptInput).focus()
+
+    def do_compact(self):
+        self.action_compact()
+
+    def do_model(self):
+        self.action_pick_model()
+
+    def do_tools(self):
+        conv = self.query_one(Conversation)
+        names = self._agent.tool_names()
+        conv.add_system("可用工具（%d 个）：%s" % (len(names), "、".join(names)))
+
+    def do_skills(self):
+        conv = self.query_one(Conversation)
+        skills = self._agent.skills
+        if not skills:
+            conv.add_system("没有加载到技能。技能放在 <项目根>/.agents/skills/ 下。")
+            return
+        lines = ["已加载 %d 个技能：" % len(skills)]
+        for s in skills:
+            lines.append("  · %s —— %s" % (s.name, s.description))
+        conv.add_system("\n".join(lines))
+
+    def do_mcp(self):
+        conv = self.query_one(Conversation)
+        agent = self._agent
+        if not settings.mcp_enabled:
+            conv.add_system("MCP 已关闭（config.ini 里 [mcp] enabled = false）")
+            return
+        if not self._mcp_ready:
+            conv.add_system("MCP 还在连接中，稍等…")
+            return
+        if agent.mcp is None:
+            conv.add_system("MCP 没有初始化。")
+            return
+
+        lines = ["MCP：%s" % agent.mcp.describe()]
+        for line in agent.mcp.status_lines():
+            lines.append("  " + line)
+        for note in agent.mcp_notes[:5]:
+            lines.append("  ! " + note)
+        conv.add_system("\n".join(lines))
+
+    def do_context(self):
+        conv = self.query_one(Conversation)
+        usage = self._agent.context_usage()
+        lines = [
+            "上下文用量：%s" % usage.summary(),
+            "  已用：%d tokens" % usage.used,
+            "  窗口：%d tokens%s" % (usage.window, "（默认值）" if usage.is_default else ""),
+            "  剩余：%d tokens" % usage.remaining,
+            "  数据来源：%s" % ("模型返回的真实用量" if usage.exact else "本地估算"),
+            "  警告阈值：达到 %.0f%% 时提示压缩" % (settings.warn_ratio * 100),
+            "",
+            "历史消息：%d 条" % len(self._agent.history),
+            "当前会话：%s" % (self._agent.session_id or "（还没保存）"),
+        ]
+        conv.add_system("\n".join(lines))
+
+    def do_clear(self):
+        self.query_one(Conversation).remove_children()
+
+    def do_help(self):
+        self.query_one(Conversation).add_system(cmd_mod.help_text())
+
+    def do_quit(self):
+        self.exit()
+
+    # ---- 压缩 ----
     def action_compact(self):
-        """执行 /compact。"""
         conv = self.query_one(Conversation)
 
         if self._busy:
@@ -286,7 +617,6 @@ class XAgentApp(App):
             conv.add_system("当前会话内容很少，不需要压缩。")
             return
 
-        # 对话太短时压缩会失败（摘要不可能比原文更短），提前拦住
         from core import context as ctx_mod
 
         hist_tokens = ctx_mod.history_tokens(self._agent.history)
@@ -302,7 +632,6 @@ class XAgentApp(App):
         self._set_status("压缩中…")
 
         def progress(*args):
-            """从工作线程里更新界面要 post 消息。"""
             self.call_from_thread(self._on_compact_progress, *args)
 
         def work():
@@ -320,9 +649,22 @@ class XAgentApp(App):
             conv.add_error("压缩失败：%s" % (args[0] if args else ""))
 
     def on_worker_state_changed(self, event):
-        """压缩 worker 结束后处理结果。"""
         from textual.worker import WorkerState
 
+        # MCP 连接完成
+        if event.worker.name == "mcp-connect":
+            if event.state == WorkerState.SUCCESS:
+                self._on_mcp_connected(event.worker.result)
+            elif event.state == WorkerState.ERROR:
+                self.query_one(Sidebar).mcp_update(
+                    [], "连接出错：%s" % event.worker.error
+                )
+                self.query_one(Conversation).add_error(
+                    "MCP 连接出错：%s" % event.worker.error
+                )
+            return
+
+        # 压缩完成
         if event.worker.name == "compact":
             if event.state != WorkerState.SUCCESS:
                 self._busy = False
@@ -348,7 +690,7 @@ class XAgentApp(App):
             self.query_one("#prompt", PromptInput).focus()
             return
 
-        # 模型列表是另一个 worker，交给原来的处理函数
+        # 模型列表
         self._handle_model_worker(event)
 
     def _finish_turn(self):
@@ -356,26 +698,6 @@ class XAgentApp(App):
         self.query_one(Sidebar).bump_turn()
         self._update_context_status()
         self.query_one("#prompt", PromptInput).focus()
-
-    def _update_context_status(self):
-        """刷新状态栏，显示上下文用量。"""
-        try:
-            usage = self._agent.context_usage()
-        except Exception:
-            return
-
-        agent = self._agent
-        parts = [
-            agent.config.model or "（未配置模型）",
-            "%d 工具" % len(agent.tools),
-            "%d 技能" % len(agent.skills),
-            "上下文 %s" % usage.summary(),
-        ]
-
-        if usage.should_warn:
-            parts.append("⚠ 需 /compact")
-
-        self.query_one("#status", Static).update("  │  ".join(parts))
 
     # ---- Agent 事件 ----
     def on_assistant_start(self, _event):
@@ -402,46 +724,11 @@ class XAgentApp(App):
         self.query_one(Conversation).add_error(event.message)
         self._finish_turn()
 
-    # ---- 快捷键 ----
-    def action_new_session(self):
-        self._agent.reset()
-        conv = self.query_one(Conversation)
-        conv.remove_children()
-        conv.add_system("已开新会话，历史已清空。")
-        self.query_one(Sidebar).setup(
-            self._agent.config.model,
-            self._agent.tool_names(),
-            self._agent.skills,
-            self._agent.skill_notes,
-        )
-
-    def action_clear(self):
-        conv = self.query_one(Conversation)
-        conv.remove_children()
-
-    def action_show_tools(self):
-        conv = self.query_one(Conversation)
-        names = self._agent.tool_names()
-        conv.add_system("可用工具（%d 个）：%s" % (len(names), "、".join(names)))
-
-    def action_show_skills(self):
-        conv = self.query_one(Conversation)
-        skills = self._agent.skills
-        if not skills:
-            conv.add_system("没有加载到技能。技能放在 <项目根>/.agents/skills/ 下。")
-            return
-        lines = ["已加载 %d 个技能：" % len(skills)]
-        for s in skills:
-            lines.append("  · %s —— %s" % (s.name, s.description))
-        conv.add_system("\n".join(lines))
-
-    # ---- 切换模型 ----
+    # ---- 模型切换 ----
     def on_model_box_clicked(self, _event):
-        """点侧边栏的模型区，弹出选择器。"""
         self.action_pick_model()
 
     def action_pick_model(self):
-        """Ctrl+M：弹出模型选择器。"""
         conv = self.query_one(Conversation)
         if self._busy:
             conv.add_system("上一轮还没结束，稍等一下再换模型。")
@@ -457,7 +744,6 @@ class XAgentApp(App):
                         name="list-models", group="models")
 
     def _handle_model_worker(self, event):
-        """模型列表 worker 结束后弹选择器。"""
         from textual.worker import WorkerState
 
         if event.worker.name != "list-models":
@@ -475,7 +761,6 @@ class XAgentApp(App):
         self.push_screen(ModelPicker(models, current, note), apply)
 
     def _switch_model(self, model_id):
-        """切到指定模型：改内存里的配置，写回 config.ini，重置会话。"""
         conv = self.query_one(Conversation)
         old = self._agent.config.model
         if model_id == old:
@@ -487,7 +772,8 @@ class XAgentApp(App):
         self._agent.reset()
         conv.add_system(
             "已切换到 %s（原 %s）%s\n会话历史已清空，避免旧上下文干扰新模型。"
-            % (model_id, old, "，配置已写回 " + detail if ok else "，但写回配置失败：" + detail)
+            % (model_id, old,
+               "，配置已写回 " + detail if ok else "，但写回配置失败：" + detail)
         )
         sb = self.query_one(Sidebar)
         sb.setup(model_id, self._agent.tool_names(), self._agent.skills,

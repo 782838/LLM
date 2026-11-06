@@ -61,7 +61,7 @@ class FakeAgent(Agent):
 async def main():
     # ---- 1. /compact 走命令分支，不当提示词发出去 ----
     agent = FakeAgent()
-    app = XAgentApp(agent=agent)
+    app = XAgentApp(agent=agent, skip_bootstrap=True)
 
     async with app.run_test(size=(110, 34)) as pilot:
         await pilot.pause()
@@ -107,17 +107,19 @@ async def main():
 
     # ---- 3. 足够长时能压缩，并弹出对比面板 ----
     agent2 = FakeAgent()
-    # 塞足够多的历史，绕过「太短」的拦截（阈值 800 token）
-    agent2.history = [
-        {"role": "user", "content": "问题" * 300},
-        {"role": "assistant", "content": "回答" * 300},
-        {"role": "user", "content": "追问" * 300},
-        {"role": "assistant", "content": "再答" * 300},
-    ]
+    agent2.history = []
 
-    app2 = XAgentApp(agent=agent2)
+    app2 = XAgentApp(agent=agent2, skip_bootstrap=True)
     async with app2.run_test(size=(110, 34)) as pilot:
         await pilot.pause()
+
+        # on_mount 里 start_session 会 reset 历史，所以等它跑完再塞数据
+        agent2.history = [
+            {"role": "user", "content": "问题" * 300},
+            {"role": "assistant", "content": "回答" * 300},
+            {"role": "user", "content": "追问" * 300},
+            {"role": "assistant", "content": "再答" * 300},
+        ]
 
         print("历史 token:", C.history_tokens(agent2.history))
 

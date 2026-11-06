@@ -8,16 +8,19 @@ import sys
 
 sys.path.insert(0, ".")
 
+from core.settings import settings
 from core.tools import cli_tools
 from core.tools.cli_tools import (
-    MAX_OUTPUT_CHARS,
-    MAX_TIMEOUT,
     decode_output,
     normalize_args,
     resolve_program,
     run_cli,
     truncate,
 )
+
+# 这两个常量已经挪进 settings，测试里用同名别名保持可读性
+MAX_OUTPUT_CHARS = settings.cli_max_output
+MAX_TIMEOUT = settings.cli_max_timeout
 
 passed = 0
 failed = []

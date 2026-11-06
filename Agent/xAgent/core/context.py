@@ -25,22 +25,35 @@ import os
 import re
 import time
 
-# ---------------------------------------------------------------- 常量
+from .settings import settings
 
-DEFAULT_WINDOW = 128 * 1024       # 拿不到真实窗口时用这个
-WARN_RATIO = 0.6                  # 60% 触发警告
-TARGET_SUMMARY_TOKENS = 5000      # 摘要目标长度
-COMPACT_DIR = os.path.join(".agents", "context")
+# ---------------------------------------------------------------- 常量（从配置读）
 
-# 粗略估算系数。
-# 中文大约 1 个字 1~1.5 token，英文大约 4 字符 1 token。
-# 取 1.4 是个折中值：中文偏保守（宁可高估触发压缩），英文略高估也能接受。
-# 真正准确的值由 API 的 usage 提供，这里只是拿不到时兜底。
-CHARS_PER_TOKEN = 1.4
+DEFAULT_WINDOW = 128 * 1024       # 拿不到真实窗口时的兜底
 
-# recallContext 返回上限，避免检索结果又撑爆上下文
-MAX_RECALL_CHARS = 6000
-MAX_SNIPPET_CHARS = 400
+
+def _warn_ratio():
+    return settings.warn_ratio
+
+
+def _target_summary_tokens():
+    return settings.target_summary_tokens
+
+
+def _chars_per_token():
+    return settings.chars_per_token or 1.4
+
+
+def _context_dirname():
+    return settings.archive_dir
+
+
+def _max_recall_chars():
+    return settings.max_recall_chars
+
+
+def _max_snippet_chars():
+    return settings.max_snippet_chars
 
 
 # ---------------------------------------------------------------- Prompt
@@ -81,7 +94,7 @@ def estimate_tokens(text):
     """
     if not text:
         return 0
-    return max(1, int(len(str(text)) / CHARS_PER_TOKEN))
+    return max(1, int(len(str(text)) / _chars_per_token()))
 
 
 def message_tokens(message):
@@ -148,7 +161,7 @@ class Usage:
 
     @property
     def should_warn(self):
-        return self.ratio >= WARN_RATIO
+        return self.ratio >= _warn_ratio()
 
     @property
     def remaining(self):
@@ -210,7 +223,9 @@ def valid_archive_id(value):
 def context_dir(root=None):
     """归档目录的绝对路径。"""
     base = root or os.getcwd()
-    return os.path.join(base, COMPACT_DIR)
+    # 配置里的路径可能用正斜杠，统一用系统分隔符
+    parts = _context_dirname().replace("\\", "/").split("/")
+    return os.path.join(base, *[p for p in parts if p])
 
 
 # ---------------------------------------------------------------- 归档
@@ -338,7 +353,9 @@ def read_archive(archive_id, root=None):
 
 # ---------------------------------------------------------------- 检索
 
-def _snippet(text, keyword, radius=MAX_SNIPPET_CHARS // 2):
+def _snippet(text, keyword, radius=None):
+    if radius is None:
+        radius = _max_snippet_chars() // 2
     """在 text 里找 keyword，截一段上下文出来。"""
     if not text:
         return ""
@@ -354,7 +371,9 @@ def _snippet(text, keyword, radius=MAX_SNIPPET_CHARS // 2):
     return prefix + piece + suffix
 
 
-def recall(text, archive_id=None, root=None, max_chars=MAX_RECALL_CHARS):
+def recall(text, archive_id=None, root=None, max_chars=None):
+    if max_chars is None:
+        max_chars = _max_recall_chars()
     """在归档里做关键词检索。
 
     返回 (结果文本, 错误信息)。
@@ -463,7 +482,7 @@ def build_compact_messages(history, system_prompt=None, target_tokens=None):
     if target_tokens is None:
         # 原文的 60%，但不超过全局目标，也不超过原文本身
         target_tokens = int(original_tokens * 0.6)
-        target_tokens = min(target_tokens, TARGET_SUMMARY_TOKENS)
+        target_tokens = min(target_tokens, _target_summary_tokens())
 
     if target_tokens < 50:
         goal = (

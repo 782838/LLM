@@ -8,11 +8,9 @@ import shutil
 import subprocess
 
 from .registry import Tool
+from ..settings import settings
 
 # 单次抓取上限，防止把超大页面整个塞进上下文
-MAX_MARKDOWN_CHARS = 20000
-DEFAULT_TIMEOUT = 30
-CURL_TIMEOUT = 20
 
 # curl 用 --fail 让 HTTP 4xx/5xx 返回非零，便于统一判错
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) xAgent/0.1"
@@ -41,11 +39,14 @@ def find_curl():
     return None
 
 
-def fetch_html(url, timeout=CURL_TIMEOUT):
+def fetch_html(url, timeout=None):
     """调 curl 取 HTML。返回 (html, 错误信息, HTTP状态)。
 
     参数列表方式执行，不经 shell，URL 里的特殊字符不会被解释。
     """
+    if timeout is None:
+        timeout = settings.fetch_timeout
+
     curl = find_curl()
     if not curl:
         return None, "系统里找不到 curl。Windows 10 及以上自带 curl.exe，请确认它在 PATH 中。", None
@@ -150,14 +151,16 @@ def html_to_markdown(html, url=""):
     return text.strip(), None
 
 
-def truncate(text, limit=MAX_MARKDOWN_CHARS):
+def truncate(text, limit=None):
+    if limit is None:
+        limit = settings.fetch_max_chars
     """超长内容截断，避免把上下文撑爆。"""
     if len(text) <= limit:
         return text, False
     return text[:limit].rstrip() + "\n\n……（内容过长，已截断）", True
 
 
-def fetch_web(url=None, max_chars=MAX_MARKDOWN_CHARS, timeout=DEFAULT_TIMEOUT):
+def fetch_web(url=None, max_chars=None, timeout=None):
     """抓一个网页，返回 Markdown 正文。"""
     if not url or not str(url).strip():
         return "缺少 url 参数。请给出要抓取的完整网址，例如 https://example.com。"
@@ -169,7 +172,7 @@ def fetch_web(url=None, max_chars=MAX_MARKDOWN_CHARS, timeout=DEFAULT_TIMEOUT):
     try:
         max_chars = int(max_chars)
     except (TypeError, ValueError):
-        max_chars = MAX_MARKDOWN_CHARS
+        max_chars = settings.fetch_max_chars
     if max_chars < 500:
         max_chars = 500
 

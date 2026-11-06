@@ -10,10 +10,8 @@ import shutil
 import subprocess
 
 from .registry import Tool
+from ..settings import settings
 
-DEFAULT_TIMEOUT = 30
-MAX_TIMEOUT = 120
-MAX_OUTPUT_CHARS = 4000
 
 
 def decode_output(raw):
@@ -32,7 +30,7 @@ def decode_output(raw):
     return raw.decode("utf-8", errors="replace")
 
 
-def truncate(text, limit=MAX_OUTPUT_CHARS):
+def truncate(text, limit=settings.cli_max_output):
     """超长输出截断，返回 (文本, 是否截断, 原始长度)。"""
     if len(text) <= limit:
         return text, False, len(text)
@@ -107,7 +105,7 @@ def format_result(command, args, code, stdout, stderr, timed_out=False, truncate
         lines.append(out_text)
         if out_cut:
             lines.append("……（输出过长已截断，原始长度 %d 字符，只显示前 %d 字符）"
-                         % (out_len, MAX_OUTPUT_CHARS))
+                         % (out_len, settings.cli_max_output))
     else:
         lines.append("（空）")
 
@@ -117,14 +115,14 @@ def format_result(command, args, code, stdout, stderr, timed_out=False, truncate
         lines.append(err_text)
         if err_cut:
             lines.append("……（输出过长已截断，原始长度 %d 字符，只显示前 %d 字符）"
-                         % (err_len, MAX_OUTPUT_CHARS))
+                         % (err_len, settings.cli_max_output))
     else:
         lines.append("（空）")
 
     return "\n".join(lines)
 
 
-def run_cli(command=None, args=None, timeout=DEFAULT_TIMEOUT):
+def run_cli(command=None, args=None, timeout=None):
     """执行一个命令行程序。
 
     command 是程序名（如 git、python、dir），args 是参数列表。
@@ -144,11 +142,11 @@ def run_cli(command=None, args=None, timeout=DEFAULT_TIMEOUT):
     try:
         timeout = int(timeout)
     except (TypeError, ValueError):
-        timeout = DEFAULT_TIMEOUT
+        timeout = settings.cli_timeout
     if timeout < 1:
-        timeout = DEFAULT_TIMEOUT
-    if timeout > MAX_TIMEOUT:
-        timeout = MAX_TIMEOUT
+        timeout = settings.cli_timeout
+    if timeout > settings.cli_max_timeout:
+        timeout = settings.cli_max_timeout
 
     program, err = resolve_program(command)
     if err:
@@ -226,7 +224,7 @@ def build_tools():
                         "type": "integer",
                         "description": (
                             "超时秒数，默认 30，最大 %d。"
-                            "执行耗时长的命令（如安装、编译）时可以调大。" % MAX_TIMEOUT
+                            "执行耗时长的命令（如安装、编译）时可以调大。" % settings.cli_max_timeout
                         ),
                     },
                 },

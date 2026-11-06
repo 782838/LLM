@@ -11,12 +11,9 @@ import urllib.error
 import urllib.request
 
 from .registry import Tool
+from ..settings import settings
 
 SEARCH_ENDPOINT = "https://qianfan.baidubce.com/v2/ai_search/web_search"
-SEARCH_TIMEOUT = 30
-DEFAULT_TOP_K = 10
-MAX_TOP_K = 50
-MAX_SNIPPET_CHARS = 300
 
 
 def read_api_key():
@@ -31,8 +28,15 @@ def read_api_key():
         return ""
 
 
-def build_payload(query, top_k=DEFAULT_TOP_K, recency=None):
+def build_payload(query, top_k=None, recency=None):
     """拼请求体。字段名以百度千帆文档为准。"""
+    if top_k is None:
+        top_k = settings.search_top_k
+    try:
+        top_k = int(top_k)
+    except (TypeError, ValueError):
+        top_k = settings.search_top_k
+
     payload = {
         "messages": [{"role": "user", "content": query}],
         "search_source": "baidu_search_v2",
@@ -43,8 +47,11 @@ def build_payload(query, top_k=DEFAULT_TOP_K, recency=None):
     return payload
 
 
-def call_api(api_key, payload, timeout=SEARCH_TIMEOUT):
+def call_api(api_key, payload, timeout=None):
     """发请求，返回 (json字典, 错误信息)。"""
+    if timeout is None:
+        timeout = settings.search_timeout
+
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
@@ -120,7 +127,7 @@ def pick_summary(data):
     return ""
 
 
-def format_results(query, results, summary="", top_k=DEFAULT_TOP_K):
+def format_results(query, results, summary="", top_k=None):
     """把结果拼成给模型看的文本。"""
     lines = ["搜索关键词：%s" % query, "结果数量：%d 条" % len(results)]
 
@@ -156,14 +163,14 @@ def format_results(query, results, summary="", top_k=DEFAULT_TOP_K):
         if meta:
             lines.append("   " + "  ".join(meta))
         if snippet:
-            if len(snippet) > MAX_SNIPPET_CHARS:
-                snippet = snippet[:MAX_SNIPPET_CHARS].rstrip() + "……"
+            if len(snippet) > settings.search_snippet_chars:
+                snippet = snippet[:settings.search_snippet_chars].rstrip() + "……"
             lines.append("   摘要：%s" % snippet.replace("\n", " "))
 
     return "\n".join(lines)
 
 
-def search_web(query=None, top_k=DEFAULT_TOP_K, recency=None):
+def search_web(query=None, top_k=None, recency=None):
     """搜网页，返回摘要和参考来源。"""
     if not query or not str(query).strip():
         return "缺少 query 参数。请给出要搜索的关键词或问题。"
@@ -189,8 +196,8 @@ def search_web(query=None, top_k=DEFAULT_TOP_K, recency=None):
     try:
         top_k = int(top_k)
     except (TypeError, ValueError):
-        top_k = DEFAULT_TOP_K
-    top_k = max(1, min(top_k, MAX_TOP_K))
+        top_k = settings.search_top_k
+    top_k = max(1, min(top_k, settings.search_max_top_k))
 
     recency = (recency or "").strip().lower() or None
     if recency not in (None, "week", "month", "semiyear", "year"):

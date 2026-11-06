@@ -70,7 +70,7 @@ python main.py --check
 | `F1` | 显示工具清单 |
 | `F2` | 显示技能清单 |
 | `Ctrl+M` | 切换模型 |
-| `/compact` | 压缩上下文（输入框里敲，不是快捷键） |
+| `/` | 输入框里敲，弹出命令补全面板 |
 | `Ctrl+C` | 退出 |
 
 ## 界面
@@ -637,6 +637,119 @@ deepseek-ai/DeepSeek-V4.1-Flash-1017  │  20 工具  │  3 技能  │  上下
 - **拿不到就估算**：按字符数折中，宁可高估
 - **窗口大小**：`/v1/models` 不返回这个信息，可以在 `config.ini` 写 `context_window = 131072`；不写就用 128k 并在界面上标「默认」
 
+## 斜杠命令
+
+输入框里敲 `/` 会弹出补全面板，边打字边过滤，↑↓ 选择，回车执行。
+
+| 命令 | 别名 | 作用 |
+|---|---|---|
+| `/new` | `/n` | 新建会话，**自动保存当前会话** |
+| `/resume` | `/r` | 弹出历史会话列表，选一个恢复 |
+| `/save` | `/s` | 保存当前会话 |
+| `/compact` | `/c` | 压缩上下文 |
+| `/model` | `/m` | 切换模型 |
+| `/tools` | `/t` | 列出可用工具 |
+| `/skills` | `/sk` | 列出已加载技能 |
+| `/mcp` | — | 查看 MCP 连接状态 |
+| `/context` | `/ctx` | 上下文用量详情 |
+| `/clear` | `/cls` | 清屏（不删历史） |
+| `/help` | `/?` | 显示帮助 |
+| `/quit` | `/q` | 退出 |
+
+命令定义集中在 `tui/commands.py`，补全面板和 `/help` 都从那里读，不会两处不一致。
+
+## 会话管理
+
+会话存在 `<项目根>/.agents/sessions/<编号>.json`，编号形如 `20261106-110000`。
+
+一个会话文件的结构：
+
+```json
+{
+  "id": "20261106-110000",
+  "created": "2026-11-06 11:00:00",
+  "updated": "2026-11-06 11:05:00",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "turns": 5,
+  "preview": "帮我做个季度汇报 PPT",
+  "agents_md": "注入时的 AGENTS.md 内容",
+  "messages": ["完整 history"]
+}
+```
+
+`agents_md` 存的是注入那一刻的内容。恢复会话时不再重新读文件 ——
+文件可能已经改了，重读会让历史和文件对不上。
+
+## AGENTS.md：一次注入，全程复用
+
+项目根放一个 `AGENTS.md`，会话开始时会作为两条消息插进 history 开头：
+
+```python
+{"role": "user", "content": "[项目说明 AGENTS.md]\n\n<文件内容>"}
+{"role": "assistant", "content": "已了解项目说明，可以开始。"}
+```
+
+**为什么只注入一次**：prompt cache 按前缀匹配。每轮重新注入会让前缀变化，
+缓存全部失效，token 成本翻倍。
+
+**恢复会话时**：历史里已经有那条注入消息（靠 `[项目说明 AGENTS.md]` 前缀识别），
+直接跳过，不会重复注入。
+
+实测效果：AGENTS.md 里写「项目代号是 X-2026」，问模型项目代号，它答得出来；
+压缩之后问，它会用 `recallContext` 去归档里确认再回答。
+
+## 配置化
+
+所有可调参数集中在 `config.ini`，代码里不再有裸的魔数。来源优先级：
+
+```
+config.ini 里的值  >  core/settings.py 里的 DEFAULTS  >  调用方传入
+```
+
+配置分区：
+
+| 小节 | 管什么 |
+|---|---|
+| （顶层） | `base_url` / `model` / `api_key` / `timeout` / `context_window` |
+| `[agent]` | `max_tool_rounds`、`session_dir`、`auto_save_on_new` |
+| `[context]` | `warn_ratio`、`target_summary_tokens`、`chars_per_token`、`max_recall_chars` |
+| `[skills]` | `dir`、`max_file_chars`、`max_name_len` |
+| `[tools]` | 各工具的超时和输出上限 |
+| `[mcp]` | `enabled`、`config_name`、三个超时 |
+| `[ui]` | `sidebar_width` |
+| `[project]` | `max_up_levels` |
+| `[search]` | `baidu_qianfan_api_key` |
+
+配置坏了也不崩：非法值退回默认，文件不存在就全用默认。
+
+## 首次运行
+
+项目根没有 `config.ini` 时，程序会自动生成一份完整模板（带 mock 值），
+然后弹窗提示「改成你自己的配置后重启」。
+
+模板里每个配置项都有注释说明。
+
+## MCP 异步加载
+
+界面**先出来**，MCP 在后台线程连，连完刷新侧边栏。不会因为某个 MCP 服务器
+连不上就让界面卡几十秒。
+
+侧边栏的 MCP 区域有四态：
+
+```
+加载中      ◐ 正在连接 MCP 服务器…
+就绪        MCP 1/1
+            ✓ Bazi-MCP (3)
+              · getBaziDetail
+              · getSolarTimes
+              · getChineseCalendar
+有错误      MCP 0/1
+            ✗ BadMCP
+              连接超时
+已关闭      MCP
+            MCP 已关闭（config.ini 里 [mcp] enabled = false）
+```
+
 ## 测试
 
 ```
@@ -651,6 +764,8 @@ python _test_mcp.py        # 50 项：配置解析、名字映射、结果归一
 python _test_models.py     # 41 项：模型列表、写回配置、项目根定位、选择器与点击
 python _test_context.py    # 85 项：token 估算、归档、压缩 Prompt、摘要校验、检索
 python _test_compact_ui.py # 12 项：/compact 拦截、输入限制、对比浮层
+python _test_final.py      # 78 项：配置化、首次生成、会话、AGENTS.md
+python _test_final_ui.py   # 32 项：命令执行、补全面板、MCP 侧边栏、首次运行弹窗
 ```
 
 `_test_layers.py` 会用 AST 检查 `core/` 里有没有导入 `textual`、`tui/` 里有没有碰网络和文件，

@@ -14,15 +14,18 @@
 """
 import json
 import os
+import time
 
+from . import agents_md
 from . import context as context_mod
+from . import session as session_mod
 from . import skills as skill_store
 from .config import Config
 from .llm.client import Client, LLMError, ToolCallBuffer
 from .mcp.manager import McpManager
+from .settings import settings
 from .tools import default_registry
 
-MAX_TOOL_ROUNDS = 12
 
 
 class ToolCall:
@@ -62,6 +65,9 @@ class Agent:
         self.config = config or Config("http://127.0.0.1:11437/v1", "")
         self.client = Client(self.config)
         self.history = []
+
+        # 让全局 settings 加载配置文件，各模块的默认参数都从这里读
+        settings.load()
 
         # 上下文监控用：上一次请求的真实 prompt_tokens，和当时的历史估算值
         self.last_prompt_tokens = None
@@ -116,6 +122,12 @@ class Agent:
         self.on_tool_end = None
         self.on_error = None
 
+        # 会话存档相关
+        self.session_id = None        # 当前会话编号，/save 后才有
+        self.session_created = None   # 会话创建时间，保存时保留
+        self.agents_md_path = None    # 注入过的 AGENTS.md 路径
+        self.agents_md_content = None # 注入时的内容，保存会话要用
+
     # ---- 回调辅助 ----
     def _emit(self, name, *args):
         fn = getattr(self, name, None)
@@ -126,6 +138,69 @@ class Agent:
     def reset(self):
         """清空历史，开新会话。"""
         self.history = []
+        self.session_id = None
+        self.session_created = None
+        self.agents_md_content = None
+        self.last_prompt_tokens = None
+        self.last_hist_tokens = 0
+
+    def start_session(self, inject_agents_md=True):
+        """开一个新会话，并按需注入 AGENTS.md。
+
+        返回 (是否注入了 AGENTS.md, 说明)。
+        """
+        self.reset()
+        if not inject_agents_md:
+            return False, "已跳过 AGENTS.md"
+
+        ok, note = agents_md.inject(self.history, self.root)
+        if ok:
+            self.agents_md_path = agents_md.find(self.root)
+            self.agents_md_content = self.history[0]["content"]
+        return ok, note
+
+    def save_session(self):
+        """保存当前会话。返回 (会话 id, 说明)。"""
+        if not self.history:
+            return None, "当前会话是空的，没有保存"
+
+        sid, path, err = session_mod.save(
+            root=self.root,
+            messages=self.history,
+            session_id=self.session_id,
+            model=self.config.model or "",
+            agents_md=self.agents_md_content,
+            created=self.session_created,
+        )
+        if err:
+            return None, err
+
+        self.session_id = sid
+        if self.session_created is None:
+            self.session_created = time.strftime("%Y-%m-%d %H:%M:%S")
+        return sid, path
+
+    def resume_session(self, session_id):
+        """恢复一个已保存的会话。返回 (成功与否, 说明)。"""
+        data, err = session_mod.load(self.root, session_id)
+        if err:
+            return False, err
+
+        self.history = list(data.get("messages") or [])
+        self.session_id = data.get("id") or session_id
+        self.session_created = data.get("created")
+        self.agents_md_content = data.get("agents_md")
+
+        # 换了上下文，之前的 token 记录作废
+        self.last_prompt_tokens = None
+        self.last_hist_tokens = 0
+
+        turns = session_mod.count_turns(self.history)
+        return True, "已恢复会话 %s（%d 轮对话）" % (self.session_id, turns)
+
+    def list_sessions(self):
+        """列出所有已保存的会话。"""
+        return session_mod.list_all(self.root)
 
     def messages(self):
         """发给模型的完整消息列表。"""
@@ -316,7 +391,7 @@ class Agent:
         schemas = self.tools.schemas()
         final_text = ""
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(settings.max_tool_rounds):
             buffer = ToolCallBuffer()
             answer = ""
             self._emit("on_assistant_start")
@@ -369,6 +444,6 @@ class Agent:
         # 轮数用完还没收敛，把当前状态告诉调用方
         self._emit(
             "on_error",
-            "连续 %d 轮都在调用工具还没给出结论，已停止。可以换个问法。" % MAX_TOOL_ROUNDS,
+            "连续 %d 轮都在调用工具还没给出结论，已停止。可以换个问法。" % settings.max_tool_rounds,
         )
         return final_text

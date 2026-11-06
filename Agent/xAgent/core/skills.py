@@ -26,11 +26,11 @@
 import os
 import re
 
+from .settings import settings
+
 SKILL_FILE = "SKILL.md"
-SKILLS_DIRNAME = os.path.join(".agents", "skills")
 
 # 单个文件的读取上限，避免技能里放了个大文件把上下文撑爆
-MAX_FILE_CHARS = 30000
 
 
 class SkillError(Exception):
@@ -138,7 +138,10 @@ def project_root():
 
 def skills_dir(root=None):
     """返回 <项目根>/.agents/skills 的绝对路径。"""
-    return os.path.join(root or project_root(), SKILLS_DIRNAME)
+    base = root or project_root()
+    # 配置里的路径可能用正斜杠，统一用系统分隔符
+    parts = settings.skills_dirname.replace("\\", "/").split("/")
+    return os.path.join(base, *[p for p in parts if p])
 
 
 def discover(root=None):
@@ -334,8 +337,8 @@ def load_skill(name=None, filename=None, skills=None, root=None):
         except OSError as e:
             return "读取技能「%s」失败：%s" % (name, e)
 
-        if len(text) > MAX_FILE_CHARS:
-            text = text[:MAX_FILE_CHARS].rstrip() + "\n……（内容过长，已截断）"
+        if len(text) > settings.max_file_chars:
+            text = text[:settings.max_file_chars].rstrip() + "\n……（内容过长，已截断）"
 
         return "技能「%s」的完整说明：\n\n%s" % (name, text.strip())
 
@@ -382,14 +385,14 @@ def load_skill(name=None, filename=None, skills=None, root=None):
         return "读取失败：%s" % e
 
     truncated = False
-    if len(content) > MAX_FILE_CHARS:
-        content = content[:MAX_FILE_CHARS].rstrip() + "\n……（内容过长，已截断）"
+    if len(content) > settings.max_file_chars:
+        content = content[:settings.max_file_chars].rstrip() + "\n……（内容过长，已截断）"
         truncated = True
 
     rel = os.path.relpath(path, skill.directory).replace(os.sep, "/")
     head = "技能「%s」的文件 %s：" % (name, rel)
     if truncated:
-        head += "（已截断到 %d 字符）" % MAX_FILE_CHARS
+        head += "（已截断到 %d 字符）" % settings.max_file_chars
 
     return head + "\n\n" + content.strip()
 
@@ -405,7 +408,6 @@ def describe(skills):
 
 # 技能名只能是「小写字母、数字、连字符」，这条规则同时满足格式要求和路径安全
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-MAX_NAME_LEN = 64
 
 
 def validate_name(name):
@@ -415,8 +417,8 @@ def validate_name(name):
 
     raw = str(name).strip()
 
-    if len(raw) > MAX_NAME_LEN:
-        return None, "技能名太长（%d 字符），上限 %d。" % (len(raw), MAX_NAME_LEN)
+    if len(raw) > settings.max_name_len:
+        return None, "技能名太长（%d 字符），上限 %d。" % (len(raw), settings.max_name_len)
 
     if not NAME_PATTERN.match(raw):
         return None, (
